@@ -272,7 +272,7 @@ curl -s -o /dev/null -w '%{http_code}\n' -u 'you@example.com:YOUR_TOKEN' \
   https://your-site.atlassian.net/rest/api/2/myself
 ```
 
-`200` = good. `401` = wrong email/token. If you did create a scoped token, it will only return `200` through `https://api.atlassian.com/ex/jira/<cloudId>/rest/api/2/myself` and needs the `read:jira-user`, `read:jira-work`, and `write:jira-work` scopes; the script already tries that gateway automatically.
+`200` = good. `401` = wrong email/token, or an **expired** token (every token now has an expiry chosen at creation; the tokens page shows it). If you did create a scoped token, it will only return `200` through `https://api.atlassian.com/ex/jira/<cloudId>/rest/api/2/myself` and needs `read:jira-work` and `write:jira-work` (plus `read:jira-user` for `/myself` itself); the script tries that gateway automatically and falls back to reading the issue when `/myself` is out of scope.
 
 ---
 

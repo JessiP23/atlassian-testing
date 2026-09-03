@@ -61,29 +61,41 @@ def preflight(auth_headers: dict[str, str]) -> str | None:
     """
     last_code = None
     for base in candidate_bases():
-        try:
-            with urllib.request.urlopen(
-                urllib.request.Request(f"{base}/rest/api/2/myself", headers=auth_headers),
-                timeout=15,
-            ) as response:
-                who = json.loads(response.read().decode("utf-8"))
-                name = who.get("displayName") or "unknown"
-                email = who.get("emailAddress") or "(email hidden by profile settings)"
-                kind = "scoped token via api.atlassian.com" if "api.atlassian.com" in base else "classic token via site URL"
-                print(f"Jira auth OK as {name} <{email}>, accountType={who.get('accountType')} ({kind})")
-                return base
-        except urllib.error.HTTPError as err:
-            last_code = err.code
-            print(f"Jira auth preflight: HTTP {err.code} from {base}", file=sys.stderr)
-            if err.code not in (401, 403, 404):
-                break
+        kind = "scoped token via api.atlassian.com" if "api.atlassian.com" in base else "classic token via site URL"
+        # /myself needs read:jira-user, which a write-only scoped token lacks, so
+        # fall back to reading the issue itself (read:jira-work) before giving up.
+        probes = [("myself", f"{base}/rest/api/2/myself")]
+        if ISSUE_KEY:
+            probes.append(("issue", f"{base}/rest/api/2/issue/{ISSUE_KEY}?fields=summary"))
+        for probe, url in probes:
+            try:
+                with urllib.request.urlopen(
+                    urllib.request.Request(url, headers=auth_headers), timeout=15
+                ) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as err:
+                last_code = err.code
+                print(f"Jira auth preflight ({probe}): HTTP {err.code} from {base}", file=sys.stderr)
+                if err.code not in (401, 403, 404):
+                    break
+                continue
+            if probe == "myself":
+                name = data.get("displayName") or "unknown"
+                email = data.get("emailAddress") or "(email hidden by profile settings)"
+                print(f"Jira auth OK as {name} <{email}>, accountType={data.get('accountType')} ({kind})")
+            else:
+                print(f"Jira auth OK: can read {ISSUE_KEY} ({kind}; token lacks read:jira-user)")
+            return base
     print("Jira auth preflight failed on every endpoint.", file=sys.stderr)
     if last_code == 401:
         print(
             "JIRA_EMAIL / JIRA_API_TOKEN were rejected by both the site URL and the "
-            "api.atlassian.com gateway. Check for whitespace in the secrets, confirm the "
-            "email is the Atlassian account that created the token, and if the token has "
-            "scopes make sure it includes write:jira-work (or recreate it without scopes).",
+            "api.atlassian.com gateway. In order of likelihood: (1) the token has expired - "
+            "Atlassian tokens carry an expiry chosen at creation, check "
+            "https://id.atlassian.com/manage-profile/security/api-tokens; (2) JIRA_EMAIL is not "
+            "the account that created the token; (3) a scoped token is missing read:jira-work "
+            "and write:jira-work. Creating a new classic token and re-entering both secrets "
+            "resolves all three.",
             file=sys.stderr,
         )
     elif last_code == 404:
