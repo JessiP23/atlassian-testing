@@ -1,0 +1,30 @@
+# Bedrock model pins for this pipeline.
+# Override in GitHub Actions variables without editing agent files.
+# Use cross-region inference profile IDs (the us. prefix), not base model IDs.
+
+haiku:
+  id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  used_for:
+    - ticket transcription
+    - orchestrator routing
+    - architecture first pass
+    - design first pass
+    - quality first pass
+    - codebase index
+    - workflow/platform edits
+
+opus:
+  id: us.anthropic.claude-opus-4-8
+  used_for:
+    - development / coding
+    - quality escalation (auth, secrets, data-loss, concurrency)
+    - orchestrator escalation (contradictory requirements)
+
+# Optional middle tier if you later enable Sonnet in this AWS account.
+sonnet:
+  id: us.anthropic.claude-sonnet-4-6
+  used_for:
+    - unused by default
+
+aws:
+  region: us-east-1

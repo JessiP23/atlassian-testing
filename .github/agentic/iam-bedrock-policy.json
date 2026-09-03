@@ -1,0 +1,37 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "BedrockInvokeClaude",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock:InvokeModel",
+        "bedrock:InvokeModelWithResponseStream",
+        "bedrock:ListInferenceProfiles",
+        "bedrock:GetInferenceProfile"
+      ],
+      "Resource": [
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-haiku-*",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-opus-*",
+        "arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-sonnet-*",
+        "arn:aws:bedrock:*:*:foundation-model/anthropic.claude-haiku-*",
+        "arn:aws:bedrock:*:*:foundation-model/anthropic.claude-opus-*",
+        "arn:aws:bedrock:*:*:foundation-model/anthropic.claude-sonnet-*"
+      ]
+    },
+    {
+      "Sid": "MarketplaceSubscribeViaBedrock",
+      "Effect": "Allow",
+      "Action": [
+        "aws-marketplace:ViewSubscriptions",
+        "aws-marketplace:Subscribe"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:CalledViaLast": "bedrock.amazonaws.com"
+        }
+      }
+    }
+  ]
+}

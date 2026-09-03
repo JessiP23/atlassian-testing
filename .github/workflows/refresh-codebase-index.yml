@@ -1,0 +1,83 @@
+name: Refresh codebase index
+
+# After every merge to the default branch, rebuild the compact map agents read
+# and open a review-only PR if it changed. Never merge.
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - ".github/agentic/codebase-index.md"
+      - ".github/agentic/run/**"
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: refresh-codebase-index
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Optional GitHub App token
+        id: app-token
+        if: ${{ secrets.APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          fetch-depth: 1
+
+      - name: Rebuild index from latest default branch
+        run: python3 .github/agentic/scripts/build_codebase_index.py
+        env:
+          REPO_ROOT: ${{ github.workspace }}
+          INDEX_OUT: .github/agentic/codebase-index.md
+          WRITE_SNAPSHOT: "0"
+
+      - name: Open review-only PR when the map changed
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- .github/agentic/codebase-index.md; then
+            echo "Index unchanged"
+            exit 0
+          fi
+          BASE="${{ github.event.repository.default_branch }}"
+          BRANCH="agent/index/${GITHUB_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
+          git add .github/agentic/codebase-index.md
+          git commit -m "chore: refresh agent codebase index from ${BASE}"
+          git push -u origin "HEAD:${BRANCH}"
+          mkdir -p /tmp
+          cat > /tmp/index-pr-body.md <<EOF
+          Refresh the compact codebase map used by agents.
+
+          Generated from \`${BASE}\` at \`${GITHUB_SHA}\`.
+          Each Jira-to-PR run also rebuilds a live index from its checkout.
+          This snapshot is a hint so agents stay aligned after merges.
+
+          Do not merge until a human reviews.
+          EOF
+          ISSUE_KEY="INDEX"
+          BRANCH="${BRANCH}"
+          BASE_BRANCH="${BASE}"
+          PR_TITLE="chore: refresh agent codebase index"
+          PR_BODY_FILE="/tmp/index-pr-body.md"
+          PR_LABELS="agent-pr,needs-human-review"
+          bash .github/agentic/scripts/open_pr.sh

@@ -1,0 +1,293 @@
+name: Jira to PR
+
+# Jira Global Automation -> GitHub repository_dispatch -> Bedrock agents -> review-only PR.
+# This workflow never merges.
+
+on:
+  repository_dispatch:
+    types: [jira-ready-for-dev]
+  workflow_dispatch:
+    inputs:
+      issue_key:
+        description: Jira issue key (for example ATL-123)
+        required: true
+        type: string
+      summary:
+        description: Ticket summary
+        required: true
+        type: string
+      description:
+        description: Ticket description (verbatim)
+        required: true
+        type: string
+      issue_type:
+        description: Jira issue type
+        required: false
+        default: Task
+        type: string
+      priority:
+        description: Jira priority
+        required: false
+        default: Medium
+        type: string
+      status:
+        description: Jira status
+        required: false
+        default: Ready for Dev
+        type: string
+      issue_url:
+        description: Browse URL for the Jira issue
+        required: false
+        type: string
+      acceptance_criteria:
+        description: Optional acceptance criteria
+        required: false
+        type: string
+
+concurrency:
+  group: jira-to-pr-${{ github.event.client_payload.issue_key || inputs.issue_key || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  BEDROCK_HAIKU_MODEL: ${{ vars.BEDROCK_HAIKU_MODEL || 'us.anthropic.claude-haiku-4-5-20251001-v1:0' }}
+  BEDROCK_OPUS_MODEL: ${{ vars.BEDROCK_OPUS_MODEL || 'us.anthropic.claude-opus-4-8' }}
+  ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ vars.BEDROCK_HAIKU_MODEL || 'us.anthropic.claude-haiku-4-5-20251001-v1:0' }}
+  ANTHROPIC_DEFAULT_OPUS_MODEL: ${{ vars.BEDROCK_OPUS_MODEL || 'us.anthropic.claude-opus-4-8' }}
+  CLAUDE_CODE_USE_BEDROCK: "1"
+
+jobs:
+  prepare:
+    name: Transcribe ticket and branch from main
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      issue_key: ${{ steps.brief.outputs.issue_key }}
+      ready_for_dev: ${{ steps.brief.outputs.ready_for_dev }}
+      branch: ${{ steps.branch.outputs.branch }}
+      base_branch: ${{ steps.branch.outputs.base_branch }}
+      summary: ${{ steps.brief.outputs.summary }}
+    steps:
+      - name: Optional GitHub App token
+        id: app-token
+        if: ${{ secrets.APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout default branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          fetch-depth: 1
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Python deps
+        run: pip install --quiet boto3
+
+      - name: Assemble Jira payload
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+          INPUT_ISSUE_KEY: ${{ inputs.issue_key }}
+          INPUT_SUMMARY: ${{ inputs.summary }}
+          INPUT_DESCRIPTION: ${{ inputs.description }}
+          INPUT_ISSUE_TYPE: ${{ inputs.issue_type }}
+          INPUT_PRIORITY: ${{ inputs.priority }}
+          INPUT_STATUS: ${{ inputs.status }}
+          INPUT_ISSUE_URL: ${{ inputs.issue_url }}
+          INPUT_ACCEPTANCE_CRITERIA: ${{ inputs.acceptance_criteria }}
+        run: python3 .github/agentic/scripts/assemble_payload.py
+
+      - name: Transcribe ticket with Bedrock Haiku
+        id: brief
+        run: python3 .github/agentic/scripts/transcribe_ticket.py
+        env:
+          RUN_DIR: .github/agentic/run
+          BEDROCK_HAIKU_MODEL: ${{ env.BEDROCK_HAIKU_MODEL }}
+
+      - name: Build codebase index from this checkout
+        run: python3 .github/agentic/scripts/build_codebase_index.py
+        env:
+          REPO_ROOT: ${{ github.workspace }}
+          INDEX_OUT: .github/agentic/run/codebase-index.md
+
+      - name: Create unique run branch
+        id: branch
+        env:
+          ISSUE_KEY: ${{ steps.brief.outputs.issue_key }}
+          READY: ${{ steps.brief.outputs.ready_for_dev }}
+          SUMMARY: ${{ steps.brief.outputs.summary }}
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.repository.default_branch }}"
+          SAFE_KEY="$(printf '%s' "${ISSUE_KEY}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/-/g')"
+          BRANCH="agent/${SAFE_KEY}/${GITHUB_RUN_ID}"
+          git checkout -b "${BRANCH}"
+          python3 .github/agentic/scripts/start_run.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f .github/agentic/run
+          git commit -m "${ISSUE_KEY}: start agent run from ${BASE}"
+          git push -u origin "HEAD:${BRANCH}"
+          echo "branch=${BRANCH}" >> "${GITHUB_OUTPUT}"
+          echo "base_branch=${BASE}" >> "${GITHUB_OUTPUT}"
+
+  implement:
+    name: Implement with Bedrock Opus
+    needs: prepare
+    if: needs.prepare.outputs.ready_for_dev == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Optional GitHub App token
+        id: app-token
+        if: ${{ secrets.APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout run branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.branch }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          fetch-depth: 1
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Stage agent profiles for Claude Code
+        run: bash .github/agentic/scripts/stage_agents.sh
+
+      - name: Install Claude Code settings for this run
+        run: |
+          mkdir -p .claude
+          cp .github/agentic/claude-ci-settings.json .claude/settings.json
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Implement with Bedrock Opus on this run branch
+        env:
+          ISSUE_KEY: ${{ needs.prepare.outputs.issue_key }}
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          BASE_BRANCH: ${{ needs.prepare.outputs.base_branch }}
+          CLAUDE_CODE_USE_BEDROCK: "1"
+          AWS_REGION: ${{ env.AWS_REGION }}
+          ANTHROPIC_MODEL: ${{ env.BEDROCK_OPUS_MODEL }}
+          ANTHROPIC_DEFAULT_OPUS_MODEL: ${{ env.BEDROCK_OPUS_MODEL }}
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: ${{ env.BEDROCK_HAIKU_MODEL }}
+          BEDROCK_OPUS_MODEL: ${{ env.BEDROCK_OPUS_MODEL }}
+        run: |
+          set -euo pipefail
+          {
+            cat .github/agentic/prompts/implement.md
+            echo
+            echo "Jira key: ${ISSUE_KEY}"
+            echo "Working branch (already created): ${BRANCH}"
+            echo "Default branch (do not push here): ${BASE_BRANCH}"
+            echo "Read .github/agentic/run/ticket-brief.md before any code change."
+          } > /tmp/implement-prompt.md
+          claude -p "$(cat /tmp/implement-prompt.md)" \
+            --model "${BEDROCK_OPUS_MODEL}" \
+            --max-turns 80 \
+            --permission-mode bypassPermissions
+
+      - name: Push implementation commits
+        env:
+          ISSUE_KEY: ${{ needs.prepare.outputs.issue_key }}
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git status
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            git add -A
+            git reset HEAD -- .claude >/dev/null 2>&1 || true
+            git add -f .github/agentic/run
+            git commit -m "${ISSUE_KEY}: agent implementation"
+          fi
+          git push origin "HEAD:${BRANCH}"
+
+  open_pr:
+    name: Open review-only pull request
+    needs: [prepare, implement]
+    if: always() && needs.prepare.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      pr_url: ${{ steps.open.outputs.pr_url }}
+    steps:
+      - name: Optional GitHub App token
+        id: app-token
+        if: ${{ secrets.APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout run branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.branch }}
+          token: ${{ steps.app-token.outputs.token || github.token }}
+          fetch-depth: 0
+
+      - name: Ensure PR body exists
+        env:
+          ISSUE_KEY: ${{ needs.prepare.outputs.issue_key }}
+          SUMMARY: ${{ needs.prepare.outputs.summary }}
+        run: python3 .github/agentic/scripts/ensure_pr_body.py
+
+      - name: Open PR (never merge)
+        id: open
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || github.token }}
+          ISSUE_KEY: ${{ needs.prepare.outputs.issue_key }}
+          BRANCH: ${{ needs.prepare.outputs.branch }}
+          BASE_BRANCH: ${{ needs.prepare.outputs.base_branch }}
+          PR_TITLE: "${{ needs.prepare.outputs.issue_key }}: ${{ needs.prepare.outputs.summary }}"
+          PR_BODY_FILE: .github/agentic/run/pr-body.md
+          PR_LABELS: agent-pr,needs-human-review
+          PR_DRAFT: "false"
+        run: bash .github/agentic/scripts/open_pr.sh
+
+  comment_jira:
+    name: Comment PR link on Jira
+    needs: [prepare, open_pr]
+    if: always() && needs.open_pr.outputs.pr_url != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.branch }}
+          fetch-depth: 1
+      - name: Comment on Jira issue
+        env:
+          ISSUE_KEY: ${{ needs.prepare.outputs.issue_key }}
+          PR_URL: ${{ needs.open_pr.outputs.pr_url }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: python3 .github/agentic/scripts/comment_jira.py

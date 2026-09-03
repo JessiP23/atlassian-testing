@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Jira ticket brief",
+  "description": "Normalized ticket used by every agent. verbatim_* fields must copy Jira, not paraphrase.",
+  "type": "object",
+  "required": [
+    "key",
+    "summary",
+    "issue_type",
+    "priority",
+    "status",
+    "verbatim_summary",
+    "verbatim_description",
+    "acceptance_criteria",
+    "scope_in",
+    "scope_out",
+    "constraints",
+    "ambiguities",
+    "files_hint",
+    "ready_for_dev"
+  ],
+  "properties": {
+    "key": { "type": "string" },
+    "summary": { "type": "string" },
+    "issue_type": { "type": "string" },
+    "priority": { "type": "string" },
+    "status": { "type": "string" },
+    "issue_url": { "type": "string" },
+    "assignee": { "type": ["string", "null"] },
+    "reporter": { "type": ["string", "null"] },
+    "labels": { "type": "array", "items": { "type": "string" } },
+    "parent_key": { "type": ["string", "null"] },
+    "verbatim_summary": { "type": "string" },
+    "verbatim_description": { "type": "string" },
+    "acceptance_criteria": { "type": "array", "items": { "type": "string" } },
+    "scope_in": { "type": "array", "items": { "type": "string" } },
+    "scope_out": { "type": "array", "items": { "type": "string" } },
+    "constraints": { "type": "array", "items": { "type": "string" } },
+    "ambiguities": { "type": "array", "items": { "type": "string" } },
+    "files_hint": { "type": "array", "items": { "type": "string" } },
+    "ready_for_dev": { "type": "boolean" }
+  }
+}
