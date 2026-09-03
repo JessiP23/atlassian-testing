@@ -245,10 +245,26 @@ jobs:
             echo "Default branch (do not push here): ${BASE_BRANCH}"
             echo "Read .github/agentic/run/ticket-brief.md before any code change."
           } > /tmp/implement-prompt.md
+          # JSON output carries token counts and turn/duration metadata for the
+          # cost report below. Claude's final message is inside the JSON.
+          set +e
           claude -p "$(cat /tmp/implement-prompt.md)" \
             --model "${BEDROCK_OPUS_MODEL}" \
             --max-turns 80 \
-            --permission-mode bypassPermissions
+            --permission-mode bypassPermissions \
+            --output-format json > /tmp/claude-result.json
+          STATUS=$?
+          set -e
+          echo "claude exited ${STATUS}; final message and usage are reported in the next step"
+          exit "${STATUS}"
+
+      - name: Report Bedrock usage and cost
+        if: always()
+        env:
+          CLAUDE_RESULT_JSON: /tmp/claude-result.json
+          RUN_DIR: .github/agentic/run
+          BEDROCK_OPUS_MODEL: ${{ env.BEDROCK_OPUS_MODEL }}
+        run: python3 .github/agentic/scripts/report_usage.py
 
       - name: Push implementation commits
         env:
