@@ -152,13 +152,20 @@ jobs:
           BRANCH="agent/${SAFE_KEY}/${GITHUB_RUN_ID}"
           git checkout -b "${BRANCH}"
           python3 .github/agentic/scripts/start_run.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f .github/agentic/run
-          git commit -m "${ISSUE_KEY}: start agent run from ${BASE}"
-          git push -u origin "HEAD:${BRANCH}"
+          # Push the branch pointing at the default-branch commit. Run artifacts under
+          # .github/agentic/run are gitignored and travel between jobs as Actions
+          # artifacts, so the PR only ever contains product code.
+          git push -u origin "HEAD:refs/heads/${BRANCH}"
           echo "branch=${BRANCH}" >> "${GITHUB_OUTPUT}"
           echo "base_branch=${BASE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Save run artifacts (brief, index, handoff)
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-run-prepare
+          path: .github/agentic/run
+          include-hidden-files: true
+          retention-days: 30
 
   implement:
     name: Implement with Bedrock Opus
@@ -184,6 +191,12 @@ jobs:
           ref: ${{ needs.prepare.outputs.branch }}
           token: ${{ steps.app-token.outputs.token || github.token }}
           fetch-depth: 1
+
+      - name: Restore run artifacts from prepare
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-run-prepare
+          path: .github/agentic/run
 
       - name: Configure AWS credentials (access keys)
         if: env.HAS_AWS_KEYS == 'true'
@@ -246,13 +259,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git status
+          # Product code only. .github/agentic/run is gitignored; .claude is the
+          # per-run tool config and must never land in the PR either.
           if ! git diff --quiet || ! git diff --cached --quiet; then
             git add -A
             git reset HEAD -- .claude >/dev/null 2>&1 || true
-            git add -f .github/agentic/run
             git commit -m "${ISSUE_KEY}: agent implementation"
           fi
           git push origin "HEAD:${BRANCH}"
+
+      - name: Save run artifacts (agent notes, PR body)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-run-implement
+          path: .github/agentic/run
+          include-hidden-files: true
+          retention-days: 30
 
   open_pr:
     name: Open review-only pull request
@@ -280,6 +303,20 @@ jobs:
           token: ${{ steps.app-token.outputs.token || github.token }}
           fetch-depth: 0
 
+      # Prepare's artifacts first, then implement's on top when that job ran.
+      - name: Restore run artifacts (prepare)
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-run-prepare
+          path: .github/agentic/run
+
+      - name: Restore run artifacts (implement)
+        if: needs.implement.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-run-implement
+          path: .github/agentic/run
+
       - name: Ensure PR body exists
         env:
           ISSUE_KEY: ${{ needs.prepare.outputs.issue_key }}
@@ -300,9 +337,11 @@ jobs:
         run: bash .github/agentic/scripts/open_pr.sh
 
   comment_jira:
-    name: Comment PR link on Jira
-    needs: [prepare, open_pr]
-    if: always() && needs.open_pr.outputs.pr_url != ''
+    name: Comment result on Jira
+    needs: [prepare, implement, open_pr]
+    # Runs whether or not a PR opened: with a PR it posts the link, without one
+    # (blocked ticket, no code) it posts the blockers so the reporter sees why.
+    if: always() && needs.prepare.result == 'success' && needs.open_pr.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -312,10 +351,25 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
+
+      - name: Restore run artifacts (prepare)
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-run-prepare
+          path: .github/agentic/run
+
+      - name: Restore run artifacts (implement)
+        if: needs.implement.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: agent-run-implement
+          path: .github/agentic/run
+
       - name: Comment on Jira issue
         env:
           ISSUE_KEY: ${{ needs.prepare.outputs.issue_key }}
           PR_URL: ${{ needs.open_pr.outputs.pr_url }}
+          BLOCKED_BODY_FILE: .github/agentic/run/pr-body.md
           JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}

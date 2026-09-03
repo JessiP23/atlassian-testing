@@ -37,9 +37,10 @@ def main() -> None:
         (run / "pr-body.md").write_text(
             f"## {key} — blocked before implementation\n\n"
             f"{summary}\n\n"
-            "The orchestrator could not faithfully turn this Jira ticket into implementable work.\n"
-            "See `ticket-brief.md` in this PR.\n\n"
-            "Do not merge until a human reviews.\n"
+            "The orchestrator could not faithfully turn this Jira ticket into implementable work, "
+            "so no code was written and no pull request was opened.\n\n"
+            "Add a concrete subject, the observed vs expected behaviour, and acceptance criteria, "
+            "then transition the ticket again.\n"
         )
 
 

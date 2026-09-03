@@ -13,8 +13,11 @@ if [[ "${BRANCH}" == "${BASE}" ]]; then
   exit 1
 fi
 
-if git diff --quiet "${BASE}...HEAD"; then
-  echo "No commits on ${BRANCH} relative to ${BASE}; skipping PR" >&2
+# Compare against the remote base explicitly; a local "${BASE}" ref may not exist
+# in a CI checkout of the run branch.
+git fetch --quiet origin "${BASE}"
+if [[ "$(git rev-list --count "origin/${BASE}..HEAD")" == "0" ]]; then
+  echo "No commits on ${BRANCH} relative to ${BASE}; skipping PR (blocked or no-op run)" >&2
   exit 0
 fi
 

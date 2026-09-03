@@ -12,23 +12,45 @@ import urllib.request
 
 ISSUE_KEY = os.environ.get("ISSUE_KEY", "").strip()
 PR_URL = os.environ.get("PR_URL", "").strip()
+BLOCKED_BODY_FILE = os.environ.get("BLOCKED_BODY_FILE", "").strip()
 BASE_URL = os.environ.get("JIRA_BASE_URL", "").rstrip("/")
 EMAIL = os.environ.get("JIRA_EMAIL", "")
 TOKEN = os.environ.get("JIRA_API_TOKEN", "")
 
+# Jira comments cap out well above this; keep blocked reports readable.
+MAX_BLOCKED_CHARS = 6000
+
+
+def build_comment() -> str | None:
+    if PR_URL:
+        return (
+            f"GitHub agent opened a review-only pull request for {ISSUE_KEY}: {PR_URL}\n\n"
+            "This PR will not be merged automatically."
+        )
+    if BLOCKED_BODY_FILE and os.path.isfile(BLOCKED_BODY_FILE):
+        with open(BLOCKED_BODY_FILE, encoding="utf-8") as fh:
+            body = fh.read().strip()
+        if len(body) > MAX_BLOCKED_CHARS:
+            body = body[:MAX_BLOCKED_CHARS] + "\n\n[truncated]"
+        return (
+            f"GitHub agent did not open a pull request for {ISSUE_KEY}. "
+            "The ticket could not be implemented as written:\n\n" + body
+        )
+    return None
+
 
 def main() -> int:
-    if not ISSUE_KEY or not PR_URL:
-        print("ISSUE_KEY and PR_URL are required", file=sys.stderr)
+    if not ISSUE_KEY:
+        print("ISSUE_KEY is required", file=sys.stderr)
         return 1
     if not BASE_URL or not EMAIL or not TOKEN:
         print("Jira comment skipped (JIRA_BASE_URL / JIRA_EMAIL / JIRA_API_TOKEN not set)")
         return 0
 
-    text = (
-        f"GitHub agent opened a review-only pull request for {ISSUE_KEY}: {PR_URL}\n\n"
-        "This PR will not be merged automatically."
-    )
+    text = build_comment()
+    if text is None:
+        print("Nothing to report: no PR URL and no blocked body file")
+        return 0
     # API v2 accepts a plain string body; v3 requires ADF.
     payload = json.dumps({"body": text}).encode("utf-8")
 
