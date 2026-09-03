@@ -1,246 +1,270 @@
-# Jira → GitHub → Amazon Bedrock → review-only PR
+# Setup checklist (access keys, not OIDC)
 
-This repository implements a Jira-triggered coding pipeline. Jira is the trigger, GitHub Actions is the orchestrator, Amazon Bedrock is the model host, and a human always merges.
+You already have AWS access keys, a GitHub PAT, and Jira API credentials. **Skip GitHub OIDC.** Put the AWS keys in GitHub. Put the GitHub PAT in Jira. Put the Jira credentials in GitHub.
 
-Inference is **not** GitHub Copilot. Ticket transcription, routing, architecture, design, and first-pass quality use **Bedrock Haiku**. Implementation and hard edge cases use **Bedrock Opus**. Pins live in [models.yml](models.yml).
-
-```
-Jira status → Ready for Dev
-        ↓
-Jira Global Automation (Send web request)
-        ↓
-GitHub repository_dispatch  event_type: jira-ready-for-dev
-        ↓
-Checkout latest default branch
-        ↓
-Haiku transcribes the ticket verbatim
-        ↓
-Build a compact codebase index from this checkout
-        ↓
-Unique branch  agent/<issue-key>/<run-id>
-        ↓
-Opus implements via agents in .github/agents/
-        ↓
-gh pr create   labels: agent-pr, needs-human-review
-        ↓
-STOP. No merge. No auto-merge.
-```
-
-Agent files (source of behavior):
-
-| File | Model | Job |
-| --- | --- | --- |
-| `orchestrator.agent.md` | Haiku | Route the run, refuse vague tickets |
-| `agentic_workflows.agent.md` | Haiku | Workflows, webhook contract, index |
-| `architecture.agent.md` | Haiku | Where the change belongs |
-| `design.agent.md` | Haiku | Behavior and contracts |
-| `development.agent.md` | Opus | Code on the run branch |
-| `quality.agent.md` | Haiku, Opus on escalation | Ticket fidelity and safety |
-
-The executable workflow is [jira-to-pr.yml](../workflows/jira-to-pr.yml). [jira-to-pr.md](../workflows/jira-to-pr.md) is the GitHub Agentic Workflow spec. Do not `gh aw compile` that markdown while the YAML runner exists, or both will fire on the same Jira event.
+Repo used below: [JessiP23/atlassian-testing](https://github.com/JessiP23/atlassian-testing).
 
 ---
 
-## 1. Amazon Bedrock
+## Two secrets, two places (read this first)
 
-1. In AWS, open Amazon Bedrock → Model catalog and enable Claude **Haiku** and Claude **Opus** (submit the use-case form once per account).
-2. Use **cross-region inference profile** IDs (`us.anthropic...`), not base model IDs. Match [models.yml](models.yml) or override with GitHub Actions variables `BEDROCK_HAIKU_MODEL` and `BEDROCK_OPUS_MODEL`.
-3. Create a GitHub OIDC identity provider: URL `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`.
-4. Create an IAM role trusted by that provider. Limit `sub` to `repo:<owner>/<repo>:*`. Attach [iam-bedrock-policy.json](iam-bedrock-policy.json).
-5. Copy the role ARN. You will store it as `AWS_ROLE_TO_ASSUME`.
+| Secret | Where it lives | Why |
+| --- | --- | --- |
+| `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` | **GitHub** Actions secrets | The workflow calls Amazon Bedrock |
+| GitHub PAT | **Jira** automation (hidden header) | Jira calls GitHub to start the workflow |
+| `JIRA_BASE_URL` + `JIRA_EMAIL` + `JIRA_API_TOKEN` | **GitHub** Actions secrets | After the PR opens, GitHub comments the PR link on the Jira ticket |
 
-Trust policy sketch:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": { "Federated": "arn:aws:iam::<ACCOUNT_ID>:oidc-provider/token.actions.githubusercontent.com" },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-        "StringLike": { "token.actions.githubusercontent.com:sub": "repo:<OWNER>/<REPO>:*" }
-      }
-    }
-  ]
-}
-```
+Those are three different credentials. Do not put AWS keys in Jira. Do not put the Jira API token in the Jira webhook body.
 
 ---
 
-## 2. GitHub
+## Step 1 — AWS: confirm Bedrock and attach IAM to the user that owns the keys
 
-### Secrets (Settings → Secrets and variables → Actions)
+OIDC is a way for GitHub to log into AWS **without** access keys. You already have keys, so you are not doing OIDC.
 
-| Secret | Required | Purpose |
-| --- | --- | --- |
-| `AWS_ROLE_TO_ASSUME` | Yes | IAM role ARN for Bedrock via OIDC |
-| `APP_ID` | Recommended | GitHub App ID so the agent PR still triggers CI |
-| `APP_PRIVATE_KEY` | Recommended | GitHub App private key |
-| `JIRA_BASE_URL` | Optional | e.g. `https://your-site.atlassian.net` |
-| `JIRA_EMAIL` | Optional | Atlassian account email for the API token |
-| `JIRA_API_TOKEN` | Optional | Atlassian API token; comments the PR URL on the ticket |
+### 1a. Open the IAM user that created the keys
 
-`GITHUB_TOKEN` can open the PR, but GitHub will **not** run CI on that PR. A GitHub App (Contents, Issues, Pull requests: read/write; webhooks disabled) avoids that.
+1. Open [IAM users](https://console.aws.amazon.com/iam/home#/users).
+2. Click the **user name** those keys belong to (not the root account if you can avoid it).
+3. Confirm the keys exist under **Security credentials** → **Access keys**.
 
-### Variables (optional)
+### 1b. Give that user Bedrock permission
 
-| Variable | Default |
+1. On that same user, open the **Permissions** tab.
+2. **Add permissions** → **Create inline policy** → **JSON**.
+3. Paste the JSON from [iam-bedrock-policy.json](iam-bedrock-policy.json).
+4. Name it `BedrockClaudeInvoke` → **Create policy**.
+
+That policy lets this user invoke Haiku and Opus, including `us.anthropic.claude-opus-5`.
+
+### 1c. Enable Anthropic models in Bedrock (once per account)
+
+1. Open Bedrock in `us-east-1`: [Model catalog](https://us-east-1.console.aws.amazon.com/bedrock/home?region=us-east-1#/model-catalog).
+2. Search **Claude Haiku 4.5**. Open it. If AWS asks for a first-time Anthropic use-case form, submit it (company/site can be a GitHub profile URL).
+3. Search **Claude Opus 5**. Open it / open it in the playground once so the Marketplace subscription can complete (can take a few minutes).
+
+Your model IDs:
+
+- Haiku: `us.anthropic.claude-haiku-4-5-20251001-v1:0`
+- Opus: `us.anthropic.claude-opus-5`
+
+The `us.` prefix is a **US cross-region inference profile**. Run the GitHub workflow with `AWS_REGION=us-east-1` unless you already use another US Bedrock region.
+
+Official docs: [Request access to Bedrock models](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
+
+---
+
+## Step 2 — GitHub: store secrets and variables
+
+Open: [https://github.com/JessiP23/atlassian-testing/settings/secrets/actions](https://github.com/JessiP23/atlassian-testing/settings/secrets/actions)
+
+**Secrets** tab → **New repository secret** for each:
+
+| Name | Value |
+| --- | --- |
+| `AWS_ACCESS_KEY_ID` | your access key id |
+| `AWS_SECRET_ACCESS_KEY` | your secret access key |
+| `JIRA_BASE_URL` | `https://YOUR-SITE.atlassian.net` (no trailing slash) |
+| `JIRA_EMAIL` | the Atlassian email that created the Jira API token |
+| `JIRA_API_TOKEN` | the Jira API token you already have |
+
+Do **not** put the GitHub PAT here. That one goes in Jira in step 4.
+
+Open: [https://github.com/JessiP23/atlassian-testing/settings/variables/actions](https://github.com/JessiP23/atlassian-testing/settings/variables/actions)
+
+**Variables** tab → **New repository variable**:
+
+| Name | Value |
 | --- | --- |
 | `AWS_REGION` | `us-east-1` |
 | `BEDROCK_HAIKU_MODEL` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
-| `BEDROCK_OPUS_MODEL` | `us.anthropic.claude-opus-4-8` |
+| `BEDROCK_OPUS_MODEL` | `us.anthropic.claude-opus-5` |
 
-### Token for Jira to call GitHub
+Official docs: [Using secrets in GitHub Actions](https://docs.github.com/en/actions/security-for-github-actions/security-guides/using-secrets-in-github-actions).
 
-Create a fine-grained PAT **or** GitHub App installation token with `contents: write` on this repo. Store it in Jira as a secret. This is what Jira sends as `Authorization: Bearer ...` to `repository_dispatch`. The token owner must have write access to the repo.
+### Enable Actions if needed
 
-### Branch protection on `main`
+[https://github.com/JessiP23/atlassian-testing/settings/actions](https://github.com/JessiP23/atlassian-testing/settings/actions)
 
-- Require a pull request.
-- Require at least one human review.
-- Do **not** allow GitHub Actions to bypass pull request rules for this pipeline.
-- Do **not** add a merge queue rule that auto-merges `agent-pr` labels.
+Allow GitHub Actions / Allow all actions.
 
-### Enable Actions
-
-Settings → Actions → Allow GitHub Actions. After the first push of these workflow files, confirm `Jira to PR` appears under the Actions tab.
+The workflow files must be **on `main`**. Push/merge this branch first. `workflow_dispatch` and `repository_dispatch` only run from the default branch.
 
 ---
 
-## 3. Jira (Atlassian)
+## Step 3 — GitHub: protect `main` (this is GitHub, not Jira)
 
-Use **Global automation** (or project automation) so every project can share one rule.
+Open: [https://github.com/JessiP23/atlassian-testing/settings/branches](https://github.com/JessiP23/atlassian-testing/settings/branches)
 
-1. Jira → Settings → **System** → **Global automation** → Create rule.
-2. **Trigger:** Issue transitioned.
-   - Destination status: `Ready for Dev` (create this status on the workflow if it does not exist).
-3. **Condition (recommended):** Issue type is Story, Bug, or Task. Skip Epics.
-4. **Condition (recommended):** Description is not empty.
-5. **Action:** Send web request.
+1. **Add classic branch protection rule**.
+2. Branch name pattern: `main`
+3. Check **Require a pull request before merging**.
+4. Check **Require approvals** → `1`.
+5. Leave **Allow specified actors to bypass required pull requests** unchecked.
+6. Check **Do not allow bypassing the above settings** if you see it.
+7. **Create**.
+
+That is the whole “protect main” step. It lives only on GitHub. Jira cannot protect `main`.
+
+Official docs: [Managing a branch protection rule](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/managing-a-branch-protection-rule).
+
+On GitHub Free personal repos, some org-only options are missing. Requiring a pull request is enough to stop the agent from merging into `main` by pushing directly. The workflow also never runs `gh pr merge`.
+
+---
+
+## Step 4 — Jira: store the GitHub PAT and send the webhook
+
+Your Jira email + token already exist. You create those at [https://id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens). Those three values (`base url`, email, token) go in **GitHub** (step 2). They are not the GitHub PAT.
+
+The GitHub PAT is what Jira uses to hit GitHub’s API. Jira has **no** GitHub-secrets page. You paste it into the automation rule as a **hidden Authorization header**.
+
+### 4a. Confirm the PAT can dispatch
+
+The PAT needs permission to create a `repository_dispatch` on `JessiP23/atlassian-testing`.
+
+- Classic PAT: `repo` scope.
+- Fine-grained PAT: Resource owner `JessiP23`, repository `atlassian-testing`, permission **Contents: Read and write**.
+
+Create/check classic tokens: [https://github.com/settings/tokens](https://github.com/settings/tokens)  
+Fine-grained: [https://github.com/settings/personal-access-tokens](https://github.com/settings/personal-access-tokens)
+
+### 4b. Open automation
+
+Replace `YOUR-SITE` with the hostname from `JIRA_BASE_URL`.
+
+- **Global** (all projects): `https://YOUR-SITE.atlassian.net/jira/settings/automation`  
+  You must be a Jira admin. Gear (⚙️) top right → **System** → **Global automation**.
+- **One project:** open the project → **Project settings** → **Automation**.  
+  Example path: `https://YOUR-SITE.atlassian.net/jira/software/projects/KEY/settings/automation`
+
+Official actions reference (includes Send web request + Hidden values): [Jira automation actions](https://support.atlassian.com/cloud-automation/docs/jira-automation-actions/).
+
+### 4c. Create the rule
+
+1. **Create rule**.
+2. Trigger: **Work item transitioned** (sometimes still labeled **Issue transitioned**).
+   - To status: `Ready for Dev`  
+   - If you do not have that status, pick the status you actually use (for example `Selected for Development`) and use that everywhere. Do not invent a status you cannot transition to.
+3. Action: **Send web request**.
+
+Fill:
 
 | Field | Value |
 | --- | --- |
-| URL | `https://api.github.com/repos/<OWNER>/<REPO>/dispatches` |
+| URL | `https://api.github.com/repos/JessiP23/atlassian-testing/dispatches` |
 | HTTP method | POST |
 | Web request body | Custom data |
-| Headers | `Accept: application/vnd.github+json` |
-| Headers | `Authorization: Bearer <JIRA_SECRET_GITHUB_TOKEN>` |
-| Headers | `Content-Type: application/json` |
-| Headers | `X-GitHub-Api-Version: 2022-11-28` |
+| Wait for response | No |
 
-Custom data (smart values **must** use `.jsonEncode` so descriptions do not break JSON):
+**Headers** (add all four):
+
+| Header | Value | Hidden |
+| --- | --- | --- |
+| `Accept` | `application/vnd.github+json` | no |
+| `Content-Type` | `application/json` | no |
+| `X-GitHub-Api-Version` | `2022-11-28` | no |
+| `Authorization` | `Bearer PASTE_THE_GITHUB_PAT_HERE` | **yes — check Hidden** |
+
+Hidden is how Jira stores the PAT. After you save, you will only see `*****`. That is expected.
+
+**Custom data.** `.jsonEncode` escapes the text but does **not** add the quotes, so each smart value must sit inside `"..."`. Without the quotes Jira's editor rejects the body with `Unable to parse fields due to invalid JSON`, because it validates the template before substituting values.
 
 ```json
 {
   "event_type": "jira-ready-for-dev",
   "client_payload": {
-    "issue_key": {{issue.key.jsonEncode}},
-    "summary": {{issue.summary.jsonEncode}},
-    "description": {{issue.description.jsonEncode}},
-    "issue_type": {{issue.issueType.name.jsonEncode}},
-    "priority": {{issue.priority.name.jsonEncode}},
-    "status": {{issue.status.name.jsonEncode}},
-    "issue_url": {{issue.url.jsonEncode}},
-    "acceptance_criteria": {{issue.customfield_10000.jsonEncode}},
-    "labels": {{issue.labels.jsonEncode}},
-    "assignee": {{issue.assignee.displayName.jsonEncode}},
-    "reporter": {{issue.reporter.displayName.jsonEncode}},
-    "parent_key": {{issue.parent.key.jsonEncode}}
+    "issue_key": "{{issue.key}}",
+    "summary": "{{issue.summary.jsonEncode}}",
+    "description": "{{issue.description.jsonEncode}}",
+    "issue_type": "{{issue.issueType.name.jsonEncode}}",
+    "priority": "{{issue.priority.name.jsonEncode}}",
+    "status": "{{issue.status.name.jsonEncode}}",
+    "issue_url": "{{issue.url}}"
   }
 }
 ```
 
-Replace `customfield_10000` with your Acceptance Criteria field id, or delete that line.
+Quoting also makes empty fields safe: a missing priority renders as `""` instead of breaking the JSON.
 
-6. Check **Delay execution** off. Turn the rule **on**.
-7. Optional second action: add a Jira comment “Handed to GitHub agent” so reporters see the handoff even before the PR exists.
+Do not use `.asJsonString` here. That function adds its own quotes, so combining it with `"..."` produces `""value""` and GitHub returns 422.
 
-Loop prevention: GitHub may later comment on the Jira issue. That comment must **not** transition status and must **not** re-trigger this rule. Trigger only on transition **into** `Ready for Dev`.
+4. Turn the rule **On**. Name it `GitHub: Ready for Dev → agent PR`.
 
 ---
 
-## 4. End-to-end test
+## Step 5 — Test in this order
 
-### A. Manual GitHub test (no Jira yet)
+### A. GitHub only (no Jira)
 
-1. Merge or push this branch so the workflow file is on the default branch. `workflow_dispatch` and `repository_dispatch` only run from the default branch.
-2. Actions → **Jira to PR** → Run workflow.
-3. Fill a real, small ticket: summary, a description with acceptance criteria, a key such as `TEST-1`.
-4. Confirm AWS OIDC works (no `Not authorized to perform sts:AssumeRoleWithWebIdentity`).
-5. Confirm Haiku wrote `.github/agentic/run/ticket-brief.md` on the agent branch with **verbatim** summary/description.
-6. Confirm a PR opened against `main`, labels `agent-pr` and `needs-human-review`, auto-merge **off**.
-7. Confirm nobody merged it.
+1. Confirm the workflow file is on `main`.
+2. Open [Actions](https://github.com/JessiP23/atlassian-testing/actions).
+3. Click **Jira to PR** → **Run workflow**.
+4. Fill a tiny ticket (one heading change, one acceptance line).
+5. The run must: assume AWS with your keys, call Haiku, open a PR, **not** merge.
 
-### B. Dispatch test (simulates Jira)
+If AWS fails, the log will say `UnrecognizedClientException` (bad keys) or `AccessDeniedException` (IAM / model access). Fix step 1, do not touch Jira yet.
 
-Replace the token, owner, and repo:
+### B. Simulate Jira with curl (still no Jira UI)
 
 ```bash
-curl -X POST \
+curl -i -X POST \
   -H "Accept: application/vnd.github+json" \
-  -H "Authorization: Bearer ${GITHUB_DISPATCH_TOKEN}" \
+  -H "Authorization: Bearer PASTE_THE_GITHUB_PAT_HERE" \
   -H "Content-Type: application/json" \
-  https://api.github.com/repos/<OWNER>/<REPO>/dispatches \
-  -d '{
-    "event_type": "jira-ready-for-dev",
-    "client_payload": {
-      "issue_key": "TEST-1",
-      "summary": "Add a test heading to the home page",
-      "description": "On the home page, show a heading that says Pipeline ready.\n\nAcceptance:\n- The heading is visible\n- Existing layout still works",
-      "issue_type": "Task",
-      "priority": "Medium",
-      "status": "Ready for Dev",
-      "issue_url": "https://example.atlassian.net/browse/TEST-1"
-    }
-  }'
+  https://api.github.com/repos/JessiP23/atlassian-testing/dispatches \
+  -d '{"event_type":"jira-ready-for-dev","client_payload":{"issue_key":"TEST-1","summary":"Add a test heading to the home page","description":"Show a heading that says Pipeline ready.\n\nAcceptance:\n- Heading is visible","issue_type":"Task","priority":"Medium","status":"Ready for Dev","issue_url":"https://example.atlassian.net/browse/TEST-1"}}'
 ```
 
-### C. Real Jira test
+Success is **HTTP 204** and an empty body. Then check Actions.
 
-1. Create a small issue with a clear description and acceptance criteria.
-2. Move it to **Ready for Dev**.
-3. Jira automation audit log should show HTTP 204 from GitHub.
-4. GitHub Actions run starts within a few seconds.
-5. PR appears; Jira gets a comment with the PR URL if Jira secrets are set.
+**401** = bad PAT. **404** = PAT cannot see the repo or the repo name is wrong. **422** = JSON body invalid.
 
-If the ticket is vague, the pipeline still opens a **blocked** PR that contains the brief and ambiguities. It will not invent a feature.
+### C. Real Jira
 
----
-
-## How agents stay current
-
-- **Every run checks out the current default branch.** Agents never plan against a stale clone you stored in the prompt.
-- **Agent files live in git.** Change an agent through a normal PR. The next Jira run loads the new profile from `main`.
-- **Live index:** `prepare` rebuilds `.github/agentic/run/codebase-index.md` from that checkout (capped map, not a source dump).
-- **Snapshot index:** on push to `main`, `refresh-codebase-index.yml` opens a review-only PR if `.github/agentic/codebase-index.md` changed. Humans merge that. The live index still wins at runtime.
-
-Do not paste the whole repo into agent markdown. Search the checkout.
+1. Create a small work item with a real description.
+2. Transition it to the status from step 4c.
+3. In the automation rule, open **Audit log**. You want GitHub status **204**.
+4. GitHub Actions starts. A PR opens. If Jira secrets in GitHub are set, the ticket gets a comment with the PR URL.
 
 ---
 
-## Tradeoffs
+## Troubleshooting
 
-**Large codebases.** Haiku cannot read the tree. The index is a map; Opus then greps and opens files. Cost and quality stay acceptable until the relevant module is huge or poorly named. Next step is path allowlists in the ticket (`files_hint`) or a retrieval service, not a bigger prompt.
+### `Unable to parse fields due to invalid JSON` in Jira custom data
 
-**Keeping agents up to date.** Profiles are process, not product knowledge. Product knowledge comes from `main` at run start. If you bake “the app has three routes” into an agent file, it will rot. Put durable conventions in agent files; put structure in the generated index.
+Jira validates the JSON template before it substitutes smart values, so a bare `{{issue.key.jsonEncode}}` is not valid JSON at edit time. `.jsonEncode` escapes the contents of a string, it does not produce the string. Wrap every smart value in quotes: `"{{issue.summary.jsonEncode}}"`. See the corrected body in step 4c.
 
-**Every merge.** The refresh workflow proposes an index PR. That is extra PR noise. You can ignore those PRs; runtime indexing still happens. Turning refresh into a direct commit to `main` would skip review and is disabled on purpose.
+### `Unrecognized named-value: 'secrets'` in a workflow file
 
-**Haiku vs Opus.** Haiku is cheap and good at extraction and routing. It will miss subtle architecture. Opus is expensive and slow but can code. The split is the cost control. If Haiku architecture plans are weak, set the architecture agent to escalate more aggressively, or pin architecture to Opus in `models.yml` and the architecture agent frontmatter.
+The `secrets` context is not available in a step-level `if:`. GitHub's [contexts reference](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#context-availability) lists only `github, needs, strategy, matrix, job, runner, env, vars, steps, inputs` for `jobs.<job_id>.steps.if`. `jobs.<job_id>.env` *does* allow `secrets`, so promote the test to a job-level env var and branch on that:
 
-**GitHub Agentic Workflows vs this YAML.** gh-aw gives sandboxing and safe-outputs, but its first-class engines are Copilot/Claude API/Codex/Gemini, not Bedrock. Claude Code on Bedrock is wired here with OIDC. The `.md` spec is ready if you later compile gh-aw and drop the YAML.
+```yaml
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      HAS_GITHUB_APP: ${{ secrets.APP_ID != '' }}
+    steps:
+      - if: env.HAS_GITHUB_APP == 'true'
+        uses: actions/create-github-app-token@v2
+```
 
-**No auto-merge.** You trade latency for review. Agents will open wrong PRs. Branch protection is the real backstop; the workflow only refuses to merge.
+Note the negative case is written `!= 'true'` rather than `== 'false'`, so an unset secret still takes the fallback path.
 
-**CI on agent PRs.** `GITHUB_TOKEN` pushes do not trigger workflows. Use a GitHub App (`APP_ID` / `APP_PRIVATE_KEY`) so lint/test still run on the agent PR.
+### Jira audit log says 204 but no run appears
 
-**Secrets in Jira payloads.** `repository_dispatch` `client_payload` is visible in the Actions UI. Do not put API tokens in the Jira ticket body. The transcriber copies the description verbatim into the PR.
+`repository_dispatch` only ever runs the workflow file as it exists on the **default branch**. If `jira-to-pr.yml` is still on a feature branch, or the file is invalid YAML, GitHub accepts the dispatch and silently does nothing. Check [Actions](https://github.com/JessiP23/atlassian-testing/actions) for a red "Invalid workflow file" banner.
 
-**Concurrency.** Two transitions of the same ticket create two branches and two PRs (`run-id` in the branch name). Close the stale one. Concurrency does not cancel in-progress runs.
+---
 
-**Dispatch payload size.** GitHub `client_payload` is small (on the order of tens of kilobytes). Huge Jira descriptions will fail the webhook. Keep implementation tickets tight, or have Jira send the key only and add a later step that fetches the issue via the Jira REST API.
+## What you can ignore
 
-**Next.js.** `AGENTS.md` / `CLAUDE.md` in the repo root are generated by `next dev`. Development still must read `node_modules/next/dist/docs/` before using Next APIs.
+- **GitHub OIDC / IAM identity provider / AWS_ROLE_TO_ASSUME** — only needed if you later delete the access keys. Skip it.
+- **APP_ID / APP_PRIVATE_KEY** — optional. Without them, GitHub will not run CI on the agent PR (`GITHUB_TOKEN` pushes do not trigger workflows). You can add a GitHub App later.
+- **Compiling** `.github/workflows/jira-to-pr.md` with `gh aw` — the YAML runner is what executes.
+
+---
+
+## If you later want OIDC instead of keys
+
+That is GitHub logging into AWS with a short-lived token instead of storing `AWS_ACCESS_KEY_ID`. Steps: [Configure OIDC in Amazon Web Services](https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services). Provider URL `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`, then an IAM **role** (not a user) that this repo can assume. You do not need that today.
