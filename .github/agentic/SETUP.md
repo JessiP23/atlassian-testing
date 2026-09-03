@@ -257,15 +257,27 @@ Note the negative case is written `!= 'true'` rather than `== 'false'`, so an un
 
 ### `Jira auth preflight: HTTP 401` in the "Comment result on Jira" job
 
-The PR was opened; only the Jira comment failed. A 401 from **both** the site URL and `api.atlassian.com` means Jira rejected the email + token pair itself, not the URL. Fix it in this order, and validate with the 10-second check workflow instead of a full Bedrock run.
+The PR was opened; only the Jira comment failed. A 401 from **both** the site URL and `api.atlassian.com` means Jira rejected the email + token pair itself, not the URL. The check output also prints the length of each secret and flags whitespace, wrapping quotes, internal line breaks, and a token that does not start with `ATATT`, all without printing the values.
 
-1. **Create a fresh token**, and prefer the classic kind. Go to [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens) → **Create API token** (not "Create API token with scopes"). Copy it immediately; it is shown once.
-2. **Use the email of the account that created the token.** It is shown at [id.atlassian.com/manage-profile/email](https://id.atlassian.com/manage-profile/email). A Google-login account and a password account with the same person behind them are different accounts.
-3. **Re-enter all three secrets** at [github.com/JessiP23/atlassian-testing/settings/secrets/actions](https://github.com/JessiP23/atlassian-testing/settings/secrets/actions). Paste into a plain-text editor first and delete any trailing newline or space. `JIRA_BASE_URL` is the bare site, e.g. `https://your-site.atlassian.net`, with no `/jira` or project path.
-4. **Run the check**: [Actions → Jira connection check → Run workflow](https://github.com/JessiP23/atlassian-testing/actions/workflows/jira-connection-check.yml). Enter a real issue key such as `KAN-1`. A pass prints `Jira auth OK as <name> <email>` and `Issue KAN-1 is visible`. It also reports the character length of each secret and flags leading/trailing whitespace, without printing the values.
-5. Then **re-run only the failed job** on the last pipeline run (Actions → the run → "Re-run failed jobs"). The comment job checks out `main`, so it picks up the current script without a new ticket.
+**Test locally first** so you are not editing GitHub secrets blind:
 
-To test the pair from your own machine first:
+```bash
+bash .github/agentic/scripts/check_jira_local.sh KAN-1
+```
+
+It prompts for the three values (token hidden) and runs the exact preflight the workflow runs. Iterate until it prints `Jira auth OK as <name> <email>` and `Issue KAN-1 is visible`, then copy those same values into GitHub.
+
+**The one mistake that survives a fresh token:** the token belongs to a different Atlassian account than the one that is a member of the Jira site. Verify like this:
+
+1. Open your Jira site (the value of `JIRA_BASE_URL`) in the browser. Click your avatar (top right) → **Account settings** (or **Profile**). The email shown there is the only valid `JIRA_EMAIL`. Note whether this account signs in with Google, Apple, Microsoft, or a password.
+2. In the **same browser session**, open [id.atlassian.com/manage-profile/email](https://id.atlassian.com/manage-profile/email). It must show the same email. If it shows a different one, you have two Atlassian accounts, and the token you created belongs to the wrong one. Log out of id.atlassian.com, log back in with the account from step 1, then create the token.
+3. Now go to [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens) → **Create API token** (the plain kind, not "with scopes"), set a long expiry, copy it once.
+4. Run the local check above with that email and token.
+5. **Re-enter the secrets** at [github.com/JessiP23/atlassian-testing/settings/secrets/actions](https://github.com/JessiP23/atlassian-testing/settings/secrets/actions). Paste the raw value only, no quotes, no trailing newline.
+6. **Confirm from GitHub**: [Actions → Jira connection check → Run workflow](https://github.com/JessiP23/atlassian-testing/actions/workflows/jira-connection-check.yml) with issue key `KAN-1`.
+7. Then **re-run only the failed job** on the last pipeline run (Actions → the run → "Re-run failed jobs"). The comment job checks out `main`, so it picks up the current script without a new ticket.
+
+Equivalent raw `curl`, if you prefer:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' -u 'you@example.com:YOUR_TOKEN' \

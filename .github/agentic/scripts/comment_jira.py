@@ -22,9 +22,19 @@ BLOCKED_BODY_FILE = os.environ.get("BLOCKED_BODY_FILE", "").strip()
 RAW_BASE_URL = os.environ.get("JIRA_BASE_URL", "")
 RAW_EMAIL = os.environ.get("JIRA_EMAIL", "")
 RAW_TOKEN = os.environ.get("JIRA_API_TOKEN", "")
-BASE_URL = RAW_BASE_URL.strip().rstrip("/")
-EMAIL = RAW_EMAIL.strip()
-TOKEN = RAW_TOKEN.strip()
+
+
+def clean_secret(raw: str) -> str:
+    """Strip whitespace and one layer of wrapping quotes; secrets are pasted, not typed."""
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1].strip()
+    return value
+
+
+BASE_URL = clean_secret(RAW_BASE_URL).rstrip("/")
+EMAIL = clean_secret(RAW_EMAIL)
+TOKEN = clean_secret(RAW_TOKEN)
 # JIRA_CHECK_ONLY=1 runs the auth preflight and exits; used by the
 # jira-connection-check workflow so secrets can be validated in seconds.
 CHECK_ONLY = os.environ.get("JIRA_CHECK_ONLY", "").strip().lower() in ("1", "true", "yes")
@@ -132,10 +142,26 @@ def describe_secrets() -> None:
         ("JIRA_EMAIL", RAW_EMAIL, EMAIL),
         ("JIRA_API_TOKEN", RAW_TOKEN, TOKEN),
     ):
-        note = ""
-        if raw != clean and raw.strip("/") != clean:
-            note = "  <- had leading/trailing whitespace; stripped for this request"
-        print(f"{label}: {len(clean)} chars{note}")
+        notes = []
+        stripped = raw.strip()
+        if stripped != raw:
+            notes.append("had leading/trailing whitespace (stripped)")
+        if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in "\"'":
+            notes.append("was wrapped in quotes (removed)")
+        if any(ch.isspace() for ch in clean):
+            notes.append("CONTAINS A SPACE OR LINE BREAK INSIDE THE VALUE - re-paste it")
+        if not clean.isascii():
+            notes.append("contains non-ASCII characters - was it copied from a rich-text field?")
+        suffix = f"  <- {'; '.join(notes)}" if notes else ""
+        print(f"{label}: {len(clean)} chars{suffix}")
+    if TOKEN and not TOKEN.startswith("ATATT"):
+        print(
+            "JIRA_API_TOKEN does not start with 'ATATT', so it is not an Atlassian API token. "
+            "Was the wrong value pasted (password, GitHub PAT, AWS key)?",
+            file=sys.stderr,
+        )
+    if EMAIL and EMAIL != EMAIL.lower():
+        print("JIRA_EMAIL has upper-case letters; Atlassian stores it lower-case", file=sys.stderr)
     if BASE_URL and not BASE_URL.startswith("https://"):
         print("JIRA_BASE_URL should start with https://", file=sys.stderr)
     if BASE_URL and "/" in BASE_URL.removeprefix("https://"):
