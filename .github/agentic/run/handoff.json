@@ -1,13 +1,37 @@
 {
   "ticket_key": "KAN-1",
-  "stage": "orchestrator",
-  "next_agent": "architecture.agent.md",
+  "stage": "complete",
+  "next_agent": null,
   "ready_for_dev": true,
-  "model_used": "haiku",
+  "model_used": "opus",
   "escalated": false,
+  "branch": "agent/kan-1/33776224757",
+  "commits": [
+    "KAN-1: replace starter home page with pipeline status page and health endpoint"
+  ],
+  "files_changed": [
+    "app/page.tsx",
+    "app/api/health/route.ts"
+  ],
+  "quality_verdict": "pass-with-nits",
   "artifacts": [
     ".github/agentic/run/ticket-brief.md",
-    ".github/agentic/run/codebase-index.md"
+    ".github/agentic/run/codebase-index.md",
+    ".github/agentic/run/architecture.md",
+    ".github/agentic/run/design.md",
+    ".github/agentic/run/development.md",
+    ".github/agentic/run/quality.md",
+    ".github/agentic/run/pr-body.md"
   ],
-  "blockers": []
+  "blockers": [],
+  "non_blocking_nits": [
+    "No automated tests; repo has no test runner and the ticket forbids new dependencies. Acceptance criteria verified via lint, build, and curl.",
+    "main element no longer sets bg-white, so light mode renders content on zinc-50 instead of a white card.",
+    "GET /api/health is dynamic by default in Next 16 rather than prerendered; no caching requirement in the ticket.",
+    "public/next.svg and public/vercel.svg are now unreferenced but intentionally left in the repo.",
+    "service value hardcoded as atlassian-testing per the ticket, differing from package.json name field.",
+    "Dark mode verified by inspecting emitted dark: classes rather than rendered screenshots."
+  ],
+  "pr_opened": false,
+  "merged": false
 }
