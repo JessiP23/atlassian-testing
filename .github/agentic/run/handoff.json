@@ -1,0 +1,13 @@
+{
+  "ticket_key": "TEST-0",
+  "stage": "orchestrator",
+  "next_agent": "architecture.agent.md",
+  "ready_for_dev": true,
+  "model_used": "haiku",
+  "escalated": false,
+  "artifacts": [
+    ".github/agentic/run/ticket-brief.md",
+    ".github/agentic/run/codebase-index.md"
+  ],
+  "blockers": []
+}

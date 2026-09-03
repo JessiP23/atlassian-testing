@@ -1,0 +1,23 @@
+{
+  "key": "TEST-0",
+  "summary": "Fix the thing",
+  "issue_type": "Task",
+  "priority": "Medium",
+  "status": "Done",
+  "issue_url": "https://example.atlassian.net/browse/TEST-0",
+  "assignee": null,
+  "reporter": null,
+  "labels": [],
+  "parent_key": null,
+  "verbatim_summary": "Fix the thing",
+  "verbatim_description": "It is broken, please fix it.",
+  "acceptance_criteria": [],
+  "scope_in": [],
+  "scope_out": [],
+  "constraints": [],
+  "ambiguities": [
+    "No explicit acceptance criteria were provided."
+  ],
+  "files_hint": [],
+  "ready_for_dev": true
+}
