@@ -42,6 +42,7 @@ Generated from the current checkout. Agents must still open files; this is a map
 - `.github/agentic/scripts/transcribe_ticket.py`
 - `.github/agentic/scripts/open_pr.sh`
 - `.github/agentic/scripts/stage_agents.sh`
+- `.github/agentic/scripts/report_usage.py`
 - `.github/agentic/scripts/ensure_pr_body.py`
 - `.github/agentic/scripts/comment_jira.py`
 - `.github/workflows/refresh-codebase-index.yml`
@@ -49,7 +50,7 @@ Generated from the current checkout. Agents must still open files; this is a map
 - `.github/workflows/jira-to-pr.md`
 
 ## File inventory (truncated)
-- Count listed: 44 (cap 200)
+- Count listed: 45 (cap 200)
 - `eslint.config.mjs`
 - `CLAUDE.md`
 - `.gitignore`
@@ -89,6 +90,7 @@ Generated from the current checkout. Agents must still open files; this is a map
 - `.github/agentic/scripts/transcribe_ticket.py`
 - `.github/agentic/scripts/open_pr.sh`
 - `.github/agentic/scripts/stage_agents.sh`
+- `.github/agentic/scripts/report_usage.py`
 - `.github/agentic/scripts/ensure_pr_body.py`
 - `.github/agentic/scripts/comment_jira.py`
 - `.github/workflows/refresh-codebase-index.yml`
