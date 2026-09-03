@@ -21,12 +21,12 @@ network:
 
 engine:
   id: claude
-  model: us.anthropic.claude-opus-4-8
+  model: us.anthropic.claude-opus-5
   env:
     CLAUDE_CODE_USE_BEDROCK: "1"
     AWS_REGION: us-east-1
     ANTHROPIC_DEFAULT_HAIKU_MODEL: us.anthropic.claude-haiku-4-5-20251001-v1:0
-    ANTHROPIC_DEFAULT_OPUS_MODEL: us.anthropic.claude-opus-4-8
+    ANTHROPIC_DEFAULT_OPUS_MODEL: us.anthropic.claude-opus-5
 
 timeout-minutes: 60
 max-turns: 80

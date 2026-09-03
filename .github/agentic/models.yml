@@ -14,7 +14,7 @@ haiku:
     - workflow/platform edits
 
 opus:
-  id: us.anthropic.claude-opus-4-8
+  id: us.anthropic.claude-opus-5
   used_for:
     - development / coding
     - quality escalation (auth, secrets, data-loss, concurrency)
