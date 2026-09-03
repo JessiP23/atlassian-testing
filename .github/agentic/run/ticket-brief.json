@@ -1,0 +1,23 @@
+{
+  "key": "KAN-1",
+  "summary": "Replace starter home page with a pipeline status page and health endpoint",
+  "issue_type": "Task",
+  "priority": "Medium",
+  "status": "In Progress",
+  "issue_url": "https://jessisworkspace-31653410.atlassian.net/browse/KAN-1",
+  "assignee": null,
+  "reporter": null,
+  "labels": [],
+  "parent_key": null,
+  "verbatim_summary": "Replace starter home page with a pipeline status page and health endpoint",
+  "verbatim_description": "Replace the create-next-app boilerplate on the home page with a simple status page that confirms the Jira-to-PR pipeline works end to end.\n\nHome page (app/page.tsx):\n\n* A top-level heading that reads exactly: Pipeline ready\n* Below the heading, a short line: Jira \u2192 GitHub Actions \u2192 Pull request\n* A list of three pipeline stages, each showing a name and a \"Connected\" badge:\n*# Jira automation\n*# GitHub Actions\n*# Pull request review\n* Remove the Next.js logo, the \"To get started\" text, and the Deploy Now / Documentation / Templates / Learning links.\n* Keep the existing Tailwind styling approach and keep dark mode working.\n\nHealth endpoint:\n\n* Add GET /api/health that returns HTTP 200 with JSON: { \"status\": \"ok\", \"service\": \"atlassian-testing\" }\n* No authentication, no database, no external calls.\n\nConstraints:\n\n* Do not add any new npm dependencies.\n* The page must stay a static server component (no client-side fetching, no \"use client\").\n* Do not modify app/layout.tsx or globals.css unless required.\n\nAcceptance criteria:\n\n* Visiting / shows an h1 with the exact text \"Pipeline ready\".\n* The three stage names and three \"Connected\" badges are visible.\n* None of the boilerplate links or the Next.js logo remain on the page.\n* curl [http://localhost:3000/api/health|http://localhost:3000/api/health] returns status 200 and the exact JSON above.\n* npm run lint and npm run build both pass with no errors.",
+  "acceptance_criteria": [],
+  "scope_in": [],
+  "scope_out": [],
+  "constraints": [],
+  "ambiguities": [
+    "No explicit acceptance criteria were provided."
+  ],
+  "files_hint": [],
+  "ready_for_dev": true
+}
