@@ -1,13 +1,34 @@
 {
   "ticket_key": "TEST-0",
-  "stage": "orchestrator",
-  "next_agent": "architecture.agent.md",
-  "ready_for_dev": true,
-  "model_used": "haiku",
+  "stage": "blocked",
+  "next_agent": null,
+  "ready_for_dev": false,
+  "model_used": "opus",
   "escalated": false,
   "artifacts": [
     ".github/agentic/run/ticket-brief.md",
-    ".github/agentic/run/codebase-index.md"
+    ".github/agentic/run/codebase-index.md",
+    ".github/agentic/run/architecture.md",
+    ".github/agentic/run/design.md",
+    ".github/agentic/run/development.md",
+    ".github/agentic/run/quality.md",
+    ".github/agentic/run/pr-body.md"
   ],
-  "blockers": []
+  "blockers": [
+    "Ticket is not implementable as transcribed: summary 'Fix the thing' and description 'It is broken, please fix it.' name no subject, no defect, no expected behaviour, and no reproduction steps.",
+    "Zero acceptance criteria, zero scope_in, zero scope_out, zero constraints, zero files_hint. Any code change would require inventing acceptance criteria, which the run rules forbid.",
+    "Repository is verified green on this checkout (npm ci, npm run lint, npm run build all pass; routes / and /_not-found build static), so no observable failure exists to anchor an inferred fix to.",
+    "ticket-brief.json shipped ready_for_dev: true despite an unusable description; architecture corrected it to false per the transcription contract. Possible gap in scripts/transcribe_ticket.py, flagged not changed.",
+    "Jira status is already 'Done', suggesting a pipeline smoke-test ticket rather than a work item. Needs human confirmation."
+  ],
+  "commits": [],
+  "product_code_changed": false,
+  "open_questions": [
+    "What is 'the thing'? Name the page, route, component, script, or workflow.",
+    "What is the observed broken behaviour (error message, wrong output, visual defect)?",
+    "What is the expected behaviour instead? This becomes the acceptance criterion.",
+    "How is it reproduced (URL, steps, environment, browser)?",
+    "Which environment shows it: local next dev, preview deploy, or production?",
+    "Ticket status is already Done. Is this a real work item or a smoke test?"
+  ]
 }
