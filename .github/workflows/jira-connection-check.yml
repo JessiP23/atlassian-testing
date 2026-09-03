@@ -1,0 +1,38 @@
+name: Jira connection check
+
+# Validates JIRA_BASE_URL / JIRA_EMAIL / JIRA_API_TOKEN in ~10 seconds without
+# running the Bedrock pipeline. Run it from the Actions tab after changing any
+# Jira secret. Optionally pass an issue key to confirm the account can see it.
+#
+# It never writes to Jira: only GET /myself and GET /issue/{key}.
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_key:
+        description: "Optional issue key (e.g. KAN-1) to confirm visibility"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Verify Jira secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: .github/agentic/scripts/comment_jira.py
+          sparse-checkout-cone-mode: false
+
+      - name: Preflight Jira credentials
+        env:
+          JIRA_CHECK_ONLY: "1"
+          ISSUE_KEY: ${{ inputs.issue_key }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+        run: python3 .github/agentic/scripts/comment_jira.py

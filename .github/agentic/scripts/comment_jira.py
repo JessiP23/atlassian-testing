@@ -10,12 +10,24 @@ import sys
 import urllib.error
 import urllib.request
 
+# Actions captures stdout through a pipe, which makes it block-buffered; keep
+# stdout and stderr interleaved in the order they were written.
+sys.stdout.reconfigure(line_buffering=True)
+
 ISSUE_KEY = os.environ.get("ISSUE_KEY", "").strip()
 PR_URL = os.environ.get("PR_URL", "").strip()
 BLOCKED_BODY_FILE = os.environ.get("BLOCKED_BODY_FILE", "").strip()
-BASE_URL = os.environ.get("JIRA_BASE_URL", "").rstrip("/")
-EMAIL = os.environ.get("JIRA_EMAIL", "")
-TOKEN = os.environ.get("JIRA_API_TOKEN", "")
+# Secrets pasted into GitHub often carry a trailing newline or space; Jira
+# rejects those with a bare 401, so strip here and say so when it mattered.
+RAW_BASE_URL = os.environ.get("JIRA_BASE_URL", "")
+RAW_EMAIL = os.environ.get("JIRA_EMAIL", "")
+RAW_TOKEN = os.environ.get("JIRA_API_TOKEN", "")
+BASE_URL = RAW_BASE_URL.strip().rstrip("/")
+EMAIL = RAW_EMAIL.strip()
+TOKEN = RAW_TOKEN.strip()
+# JIRA_CHECK_ONLY=1 runs the auth preflight and exits; used by the
+# jira-connection-check workflow so secrets can be validated in seconds.
+CHECK_ONLY = os.environ.get("JIRA_CHECK_ONLY", "").strip().lower() in ("1", "true", "yes")
 
 # Jira comments cap out well above this; keep blocked reports readable.
 MAX_BLOCKED_CHARS = 6000
@@ -55,9 +67,10 @@ def preflight(auth_headers: dict[str, str]) -> str | None:
                 timeout=15,
             ) as response:
                 who = json.loads(response.read().decode("utf-8"))
-                name = who.get("displayName") or who.get("emailAddress") or "unknown"
+                name = who.get("displayName") or "unknown"
+                email = who.get("emailAddress") or "(email hidden by profile settings)"
                 kind = "scoped token via api.atlassian.com" if "api.atlassian.com" in base else "classic token via site URL"
-                print(f"Jira auth OK as {name} ({kind})")
+                print(f"Jira auth OK as {name} <{email}>, accountType={who.get('accountType')} ({kind})")
                 return base
         except urllib.error.HTTPError as err:
             last_code = err.code
@@ -100,12 +113,72 @@ def build_comment() -> str | None:
     return None
 
 
+def describe_secrets() -> None:
+    """Print shape-only facts about the secrets (never their values)."""
+    for label, raw, clean in (
+        ("JIRA_BASE_URL", RAW_BASE_URL, BASE_URL),
+        ("JIRA_EMAIL", RAW_EMAIL, EMAIL),
+        ("JIRA_API_TOKEN", RAW_TOKEN, TOKEN),
+    ):
+        note = ""
+        if raw != clean and raw.strip("/") != clean:
+            note = "  <- had leading/trailing whitespace; stripped for this request"
+        print(f"{label}: {len(clean)} chars{note}")
+    if BASE_URL and not BASE_URL.startswith("https://"):
+        print("JIRA_BASE_URL should start with https://", file=sys.stderr)
+    if BASE_URL and "/" in BASE_URL.removeprefix("https://"):
+        print(
+            "JIRA_BASE_URL should be the bare site, e.g. https://your-site.atlassian.net "
+            "(no /jira, /browse, or project path)",
+            file=sys.stderr,
+        )
+    if EMAIL and "@" not in EMAIL:
+        print("JIRA_EMAIL does not look like an email address", file=sys.stderr)
+    if TOKEN and len(TOKEN) < 24:
+        print("JIRA_API_TOKEN looks too short to be an Atlassian API token", file=sys.stderr)
+
+
 def main() -> int:
-    if not ISSUE_KEY:
+    if not CHECK_ONLY and not ISSUE_KEY:
         print("ISSUE_KEY is required", file=sys.stderr)
         return 1
     if not BASE_URL or not EMAIL or not TOKEN:
+        if CHECK_ONLY:
+            print(
+                "JIRA_BASE_URL / JIRA_EMAIL / JIRA_API_TOKEN must all be set as repository secrets",
+                file=sys.stderr,
+            )
+            return 1
         print("Jira comment skipped (JIRA_BASE_URL / JIRA_EMAIL / JIRA_API_TOKEN not set)")
+        return 0
+
+    # Send Basic auth preemptively. Jira Cloud answers anonymous requests with
+    # 404 and no WWW-Authenticate challenge, so urllib's HTTPBasicAuthHandler
+    # (which waits for a 401 before attaching credentials) never authenticates.
+    credentials = base64.b64encode(f"{EMAIL}:{TOKEN}".encode("utf-8")).decode("ascii")
+    auth_headers = {"Accept": "application/json", "Authorization": f"Basic {credentials}"}
+
+    if CHECK_ONLY:
+        describe_secrets()
+        api_base = preflight(auth_headers)
+        if api_base is None:
+            return 1
+        if ISSUE_KEY:
+            probe = urllib.request.Request(
+                f"{api_base}/rest/api/2/issue/{ISSUE_KEY}?fields=summary", headers=auth_headers
+            )
+            try:
+                with urllib.request.urlopen(probe, timeout=15) as response:
+                    summary = json.loads(response.read().decode("utf-8"))["fields"]["summary"]
+                print(f"Issue {ISSUE_KEY} is visible: {summary}")
+            except urllib.error.HTTPError as err:
+                print(
+                    f"Auth works but {ISSUE_KEY} returned HTTP {err.code}: the account cannot "
+                    "see this issue or the key is wrong.",
+                    file=sys.stderr,
+                )
+                return 1
+        print("Jira connection check passed.")
         return 0
 
     text = build_comment()
@@ -115,14 +188,9 @@ def main() -> int:
     # API v2 accepts a plain string body; v3 requires ADF.
     payload = json.dumps({"body": text}).encode("utf-8")
 
-    # Send Basic auth preemptively. Jira Cloud answers anonymous requests with
-    # 404 and no WWW-Authenticate challenge, so urllib's HTTPBasicAuthHandler
-    # (which waits for a 401 before attaching credentials) never authenticates.
-    credentials = base64.b64encode(f"{EMAIL}:{TOKEN}".encode("utf-8")).decode("ascii")
-    auth_headers = {"Accept": "application/json", "Authorization": f"Basic {credentials}"}
-
     api_base = preflight(auth_headers)
     if api_base is None:
+        describe_secrets()
         return 1
 
     url = f"{api_base}/rest/api/2/issue/{ISSUE_KEY}/comment"
