@@ -60,7 +60,8 @@ jobs:
             exit 0
           fi
           BASE="${{ github.event.repository.default_branch }}"
-          BRANCH="agent/index/${GITHUB_RUN_ID}"
+          # Include the attempt so a re-run never collides with a branch a failed attempt already pushed.
+          BRANCH="agent/index/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "${BRANCH}"
@@ -77,10 +78,11 @@ jobs:
 
           Do not merge until a human reviews.
           EOF
-          ISSUE_KEY="INDEX"
-          BRANCH="${BRANCH}"
-          BASE_BRANCH="${BASE}"
-          PR_TITLE="chore: refresh agent codebase index"
-          PR_BODY_FILE="/tmp/index-pr-body.md"
-          PR_LABELS="agent-pr,needs-human-review"
+          # open_pr.sh runs as a child process, so these must be exported, not just assigned.
+          export ISSUE_KEY="INDEX"
+          export BRANCH
+          export BASE_BRANCH="${BASE}"
+          export PR_TITLE="chore: refresh agent codebase index"
+          export PR_BODY_FILE="/tmp/index-pr-body.md"
+          export PR_LABELS="agent-pr,needs-human-review"
           bash .github/agentic/scripts/open_pr.sh
