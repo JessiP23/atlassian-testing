@@ -306,9 +306,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Check out the default branch, not the agent branch: this step only needs
+      # the infra script, and pulling it from main lets a re-run pick up fixes.
       - uses: actions/checkout@v5
         with:
-          ref: ${{ needs.prepare.outputs.branch }}
+          ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 1
       - name: Comment on Jira issue
         env:
