@@ -21,6 +21,67 @@ TOKEN = os.environ.get("JIRA_API_TOKEN", "")
 MAX_BLOCKED_CHARS = 6000
 
 
+def candidate_bases() -> list[str]:
+    """Site URL first (classic tokens), then the platform gateway (scoped tokens).
+
+    Atlassian's newer "API tokens with scopes" only authenticate through
+    https://api.atlassian.com/ex/jira/{cloudId}; against the site URL they 401.
+    The cloud ID is public at {site}/_edge/tenant_info, so resolve it here rather
+    than asking operators to know which token type they created.
+    """
+    bases = [BASE_URL]
+    try:
+        with urllib.request.urlopen(f"{BASE_URL}/_edge/tenant_info", timeout=10) as response:
+            cloud_id = json.loads(response.read().decode("utf-8")).get("cloudId")
+        if cloud_id:
+            bases.append(f"https://api.atlassian.com/ex/jira/{cloud_id}")
+    except (urllib.error.URLError, ValueError, KeyError):
+        pass
+    return bases
+
+
+def preflight(auth_headers: dict[str, str]) -> str | None:
+    """Return the first API base that accepts the credentials, or None.
+
+    /rest/api/2/myself answers 200 for valid credentials and 401 otherwise.
+    Without this check, bad secrets and an invisible issue both surface as an
+    identical 404 from the comment endpoint.
+    """
+    last_code = None
+    for base in candidate_bases():
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(f"{base}/rest/api/2/myself", headers=auth_headers),
+                timeout=15,
+            ) as response:
+                who = json.loads(response.read().decode("utf-8"))
+                name = who.get("displayName") or who.get("emailAddress") or "unknown"
+                kind = "scoped token via api.atlassian.com" if "api.atlassian.com" in base else "classic token via site URL"
+                print(f"Jira auth OK as {name} ({kind})")
+                return base
+        except urllib.error.HTTPError as err:
+            last_code = err.code
+            print(f"Jira auth preflight: HTTP {err.code} from {base}", file=sys.stderr)
+            if err.code not in (401, 403, 404):
+                break
+    print("Jira auth preflight failed on every endpoint.", file=sys.stderr)
+    if last_code == 401:
+        print(
+            "JIRA_EMAIL / JIRA_API_TOKEN were rejected by both the site URL and the "
+            "api.atlassian.com gateway. Check for whitespace in the secrets, confirm the "
+            "email is the Atlassian account that created the token, and if the token has "
+            "scopes make sure it includes write:jira-work (or recreate it without scopes).",
+            file=sys.stderr,
+        )
+    elif last_code == 404:
+        print(
+            "JIRA_BASE_URL does not look like a Jira site "
+            "(expected https://your-site.atlassian.net with no trailing path).",
+            file=sys.stderr,
+        )
+    return None
+
+
 def build_comment() -> str | None:
     if PR_URL:
         return (
@@ -60,27 +121,11 @@ def main() -> int:
     credentials = base64.b64encode(f"{EMAIL}:{TOKEN}".encode("utf-8")).decode("ascii")
     auth_headers = {"Accept": "application/json", "Authorization": f"Basic {credentials}"}
 
-    # Preflight: /myself returns 200 for valid credentials and 401 otherwise.
-    # Without this, bad secrets and an invisible issue both surface as an identical 404.
-    try:
-        with urllib.request.urlopen(
-            urllib.request.Request(f"{BASE_URL}/rest/api/2/myself", headers=auth_headers)
-        ) as response:
-            who = json.loads(response.read().decode("utf-8"))
-            print(f"Jira auth OK as {who.get('displayName') or who.get('emailAddress') or 'unknown'}")
-    except urllib.error.HTTPError as err:
-        print(f"Jira auth preflight failed: HTTP {err.code}", file=sys.stderr)
-        if err.code == 401:
-            print("JIRA_EMAIL / JIRA_API_TOKEN were rejected. Fix the GitHub secrets.", file=sys.stderr)
-        elif err.code == 404:
-            print(
-                "JIRA_BASE_URL does not look like a Jira site "
-                "(expected https://your-site.atlassian.net with no trailing path).",
-                file=sys.stderr,
-            )
+    api_base = preflight(auth_headers)
+    if api_base is None:
         return 1
 
-    url = f"{BASE_URL}/rest/api/2/issue/{ISSUE_KEY}/comment"
+    url = f"{api_base}/rest/api/2/issue/{ISSUE_KEY}/comment"
     req = urllib.request.Request(
         url,
         data=payload,
