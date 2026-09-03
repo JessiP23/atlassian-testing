@@ -1,13 +1,32 @@
 {
   "ticket_key": "KAN-1",
-  "stage": "orchestrator",
-  "next_agent": "architecture.agent.md",
+  "stage": "complete",
+  "next_agent": null,
   "ready_for_dev": true,
-  "model_used": "haiku",
+  "model_used": "opus",
   "escalated": false,
+  "branch": "agent/kan-1/33778141548",
+  "commit": "12420ee",
+  "quality_verdict": "pass-with-nits",
   "artifacts": [
     ".github/agentic/run/ticket-brief.md",
-    ".github/agentic/run/codebase-index.md"
+    ".github/agentic/run/codebase-index.md",
+    ".github/agentic/run/architecture.md",
+    ".github/agentic/run/design.md",
+    ".github/agentic/run/development.md",
+    ".github/agentic/run/quality.md",
+    ".github/agentic/run/pr-body.md"
   ],
-  "blockers": []
+  "files_changed": [
+    "app/page.tsx",
+    "app/api/health/route.ts"
+  ],
+  "blockers": [],
+  "non_blocking": [
+    "Repo has no test runner; acceptance criteria 1-4 verified manually, not regression-guarded in CI.",
+    "Dark mode verified by class inspection only; no rendered dark-mode check.",
+    "app/layout.tsx still sets title 'Create Next App'; left alone per ticket constraint.",
+    "service value 'atlassian-testing' intentionally differs from package.json name 'atlassian'.",
+    "'Connected' badges are static copy and reflect no real connectivity check."
+  ]
 }
