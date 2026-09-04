@@ -108,7 +108,7 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
 
   const g = new StateGraph(S)
     .addNode('intake', N('intake', intakeNode({ budget })))
-    .addNode('locate', N('locate', locateNode({ budget })))
+    .addNode('locate', N('locate', locateNode({ budget, onProgress })))
     .addNode('planning', N('planning', planNode({ budget })))
     .addNode('reproduce', N('reproduce', reproduceNode({ budget, onProgress })))
     .addNode('patch', N('patch', patchNode({ budget, onProgress })))

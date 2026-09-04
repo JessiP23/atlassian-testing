@@ -42,6 +42,21 @@ export default {
     return null
   },
 
+  /**
+   * Where the user's journey starts. Used only when phrase, term and graph seeds all come back
+   * empty — a structural fact about the app, not a guess, and one import hop from here covers a
+   * small app completely.
+   */
+  entryPoints(files) {
+    const rank = (p) =>
+      /^(src\/)?app\/page\.[tj]sx?$/.test(p) ? 0 :
+      /^(src\/)?app\/.*page\.[tj]sx?$/.test(p) ? 1 :
+      /^(src\/)?pages\/index\.[tj]sx?$/.test(p) ? 1 :
+      /^(src\/)?app\/layout\.[tj]sx?$/.test(p) ? 2 :
+      /^(src\/)?(pages|app|components|containers)\//.test(p) ? 3 : 9
+    return files.filter((f) => rank(f.path) < 9).sort((a, b) => rank(a.path) - rank(b.path))
+  },
+
   // `next dev` is the right server for the witness: it hot-reloads, so the SAME spec re-runs
   // against the patched code without a rebuild.
   app: {

@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { extractVocabulary } from './lib/symbols.mjs'
+import { extractVocabulary, extractUiText } from './lib/symbols.mjs'
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', 'coverage', '.nx', '.cache',
@@ -145,6 +145,7 @@ function extract(abs) {
   // scored tickets against metadata rather than code — see lib/symbols.mjs for why that capped
   // any-hit@25 at 50%.
   const { symbols, strings } = extractVocabulary(src)
+  const uiText = extractUiText(src)
 
   return {
     exports: [...exports].slice(0, 60),
@@ -152,6 +153,7 @@ function extract(abs) {
     gqlOps: [...gqlOps].slice(0, 30),
     routes: [...routes].slice(0, 30),
     symbols,
+    uiText,
     strings,
     loc: src.split('\n').length,
   }

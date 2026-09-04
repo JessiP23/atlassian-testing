@@ -108,3 +108,39 @@ export function extractVocabulary(src) {
     strings: [...strings].slice(0, 80),
   }
 }
+
+// ---- visible UI text -------------------------------------------------------------------------
+//
+// The third channel, and the one that answers a UI ticket. `strings` captures quoted literals —
+// classNames, URLs, i18n keys — but the words a reporter actually types are the words they SAW on
+// screen, and those are JSX TEXT, not string literals:
+//
+//     <a className="...">Deploy Now</a>
+//
+// "Deploy Now" appears in no export, no import, no path segment and no string literal, so a ticket
+// about that button is lexically unreachable. This channel indexes what a user can read: JSX text
+// nodes, and the attributes that render as text (alt, aria-label, placeholder, title, label).
+//
+// Kept deliberately narrow — human-facing phrases only, capped per file — because the measured
+// negative result on whole-file vocabulary (any-hit@25 fell 1-2pp) came from flooding BM25 with
+// document frequency. This is matched as a PHRASE, not summed as terms.
+const JSX_TEXT = />([^<>{}]{2,80})</g
+const TEXT_ATTR = /\b(?:alt|aria-label|placeholder|title|label)\s*=\s*["']([^"']{2,80})["']/g
+export function extractUiText(src, { cap = 80 } = {}) {
+  const out = new Set()
+  const add = (raw) => {
+    const t = String(raw).replace(/\s+/g, ' ').trim()
+    if (t.length < 2 || t.length > 80) return
+    if (!/[A-Za-z]/.test(t)) return                     // punctuation / numbers only
+    if (/^[{}()[\];,.:]+$/.test(t)) return
+    if (/^(https?:|\/\/|#|&\w+;)/.test(t)) return         // urls, entities
+    if (/[<>]/.test(t)) return
+    // Tailwind-ish class soup and code-looking tokens are not something a person reads out loud.
+    if (/^[a-z0-9:\-\[\]/.]+$/.test(t) && !t.includes(' ')) return
+    if (/(^|\s)(flex|grid|text-|bg-|dark:|sm:|md:|lg:|rounded|border|px-|py-|gap-|w-|h-)/.test(t) && /\s/.test(t)) return
+    out.add(t)
+  }
+  for (const m of src.matchAll(JSX_TEXT)) add(m[1])
+  for (const m of src.matchAll(TEXT_ATTR)) add(m[1])
+  return [...out].slice(0, cap)
+}

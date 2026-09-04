@@ -69,6 +69,17 @@ export default {
     }
   },
 
+  /** Route/screen entry points of the web client, most specific first. */
+  entryPoints(files) {
+    const W = 'packages/clients/web-app/src'
+    const rank = (p) =>
+      new RegExp(`^${W}/(App|Router|routes)`).test(p) ? 0 :
+      p.startsWith(`${W}/containers/`) ? 1 :
+      p.startsWith(`${W}/pages/`) ? 1 :
+      p.startsWith(`${W}/components/`) ? 2 : 9
+    return files.filter((f) => rank(f.path) < 9).sort((a, b) => rank(a.path) - rank(b.path))
+  },
+
   app: {
     argv: (port) => ['nx', 'run', 'clients-web-app:serve:development', `--port=${port}`, '--host=127.0.0.1'],
     defaultUrl: 'http://localhost:3000',

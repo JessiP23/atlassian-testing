@@ -1,0 +1,29 @@
+feat(locate): seed retrieval from what the reporter saw, then walk the graph
+
+The small-repo fallback is gone — dumping an index into the prompt is not
+localisation. What replaces it is three real signals and one structural
+last resort, all bounded by the existing candidate width:
+
+  1. PHRASE  the index gains a uiText channel: JSX text plus the attributes that
+             render as text (alt, aria-label, placeholder, title, label). A
+             reporter writes the words they READ, and those words are JSX text,
+             not string literals — "Deploy Now" appears in no export, import,
+             path segment or quoted literal in app/page.tsx, which is exactly why
+             KAN-5 got zero candidates. Matched as a multi-word or quoted PHRASE,
+             never summed as terms, so it cannot repeat the measured regression
+             from indexing whole-file vocabulary (any-hit@25 fell 1-2pp there).
+  2. ROUTER  BM25 over the indexed surface plus history, unchanged.
+  3. GRAPH   one hop from whatever seeds 1 and 2 produced, both directions —
+             the cause is usually one import from the file showing the symptom.
+  4. ENTRY   only when 1-3 are all empty: the profile's declared entry points
+             (app/page.tsx and friends for nextjs; App/routes/containers for the
+             nx web client), then one hop from there.
+
+Each candidate now carries WHY it is there, so the re-rank prompt and the trace
+show `renders "deploy now"` or `imports one of the seeds` rather than a bare
+score. On this repo the ticket text now seeds app/page.tsx exactly, with no
+enumeration and no guess; on a monorepo steps 1 and 3 add signal and step 4
+never fires.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T
