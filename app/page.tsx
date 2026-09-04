@@ -1,8 +1,130 @@
+"use client";
+
 import Image from "next/image";
+import { useState, type FormEvent } from "react";
+
+type Asset = {
+  tag: string;
+  name: string;
+  location: string;
+};
 
 export default function Home() {
+  const [query, setQuery] = useState("");
+  const [searchedFor, setSearchedFor] = useState("");
+  const [results, setResults] = useState<Asset[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  // KAN-11: the searched term is held apart from the input value so Retry replays the query that
+  // failed, whatever the user has typed since.
+  async function runSearch(term: string) {
+    setSearchedFor(term);
+    setLoading(true);
+    setFailed(false);
+    setResults(null);
+
+    try {
+      const response = await fetch(
+        `/api/assets/search?q=${encodeURIComponent(term)}`,
+      );
+      if (!response.ok) {
+        setFailed(true);
+        return;
+      }
+      const body: { results?: Asset[] } = await response.json();
+      setResults(body.results ?? []);
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void runSearch(query);
+  }
+
   return (
     <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
+      <section className="w-full max-w-3xl bg-white px-16 pt-16 dark:bg-black">
+        <h2 className="text-xl font-semibold tracking-tight text-black dark:text-zinc-50">
+          Asset lookup
+        </h2>
+        <form
+          className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end"
+          onSubmit={handleSubmit}
+        >
+          <div className="flex flex-1 flex-col gap-1.5">
+            <label
+              htmlFor="asset-search"
+              className="text-sm font-medium text-zinc-600 dark:text-zinc-400"
+            >
+              Search assets
+            </label>
+            <input
+              id="asset-search"
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Tag, name or location"
+              className="h-11 rounded-lg border border-solid border-black/[.08] px-3 text-base text-black placeholder:text-zinc-400 dark:border-white/[.145] dark:text-zinc-50"
+            />
+          </div>
+          <button
+            type="submit"
+            className="h-11 rounded-full bg-foreground px-5 text-base font-medium text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc]"
+          >
+            Search
+          </button>
+        </form>
+
+        <div aria-live="polite" className="mt-4 min-h-6 text-base">
+          {loading && (
+            <p className="text-zinc-600 dark:text-zinc-400">Searching…</p>
+          )}
+          {!loading && failed && (
+            <div className="flex flex-col items-start gap-2">
+              <p className="text-red-600 dark:text-red-400">
+                Something went wrong while looking up assets.
+              </p>
+              <button
+                type="button"
+                onClick={() => void runSearch(searchedFor)}
+                className="h-9 rounded-full border border-solid border-black/[.08] px-4 text-sm font-medium transition-colors hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a]"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+          {!loading && !failed && results?.length === 0 && (
+            <p className="text-zinc-600 dark:text-zinc-400">
+              No matching assets found.
+            </p>
+          )}
+          {!loading && !failed && results && results.length > 0 && (
+            <ul className="flex flex-col gap-2">
+              {results.map((asset) => (
+                <li
+                  key={asset.tag}
+                  className="rounded-lg border border-solid border-black/[.08] px-3 py-2 dark:border-white/[.145]"
+                >
+                  <span className="font-mono text-sm text-black dark:text-zinc-50">
+                    {asset.tag}
+                  </span>
+                  <span className="ml-2 text-black dark:text-zinc-50">
+                    {asset.name}
+                  </span>
+                  <span className="block text-sm text-zinc-600 dark:text-zinc-400">
+                    {asset.location}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </section>
       <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
         <Image
           className="dark:invert h-5 w-[100px]"
