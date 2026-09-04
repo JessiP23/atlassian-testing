@@ -1,0 +1,8 @@
+
+Running 1 test using 1 worker
+
+320px metrics {"padLeft":24,"padRight":24,"padTop":64,"padBottom":64,"contentWidth":272,"headlineLines":2,"headlineLineHeight":40,"headlineColor":"rgb(0, 0, 0)","docScrollWidth":320,"docClientWidth":320}
+1280px metrics {"padLeft":64,"padRight":64,"padTop":128,"padBottom":128,"contentWidth":640,"headlineLines":2,"headlineLineHeight":40,"headlineColor":"rgb(0, 0, 0)","docScrollWidth":1280,"docClientWidth":1280}
+  ✓  1 [chromium] › ../runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:36:1 › KAN-12 <main> padding shrinks at 320px and is unchanged at 1280px (1.3s)
+
+  1 passed (1.9s)

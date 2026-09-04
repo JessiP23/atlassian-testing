@@ -1,0 +1,138 @@
+
+Running 1 test using 1 worker
+
+320px metrics {"padLeft":64,"padRight":64,"padTop":128,"padBottom":128,"contentWidth":192,"headlineLines":4,"headlineLineHeight":40,"headlineColor":"rgb(0, 0, 0)","docScrollWidth":320,"docClientWidth":320}
+1280px metrics {"padLeft":64,"padRight":64,"padTop":128,"padBottom":128,"contentWidth":640,"headlineLines":2,"headlineLineHeight":40,"headlineColor":"rgb(0, 0, 0)","docScrollWidth":1280,"docClientWidth":1280}
+  ✘  1 [chromium] › ../runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:36:1 › KAN-12 <main> padding shrinks at 320px and is unchanged at 1280px (1.3s)
+
+
+  1) [chromium] › ../runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:36:1 › KAN-12 <main> padding shrinks at 320px and is unchanged at 1280px 
+
+    Error: left padding at 320px
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 24
+    Received:    64
+
+      44 |
+      45 |   await check(page, '01-mobile-320-main-padding', async () => {
+    > 46 |     expect.soft(small.padLeft, 'left padding at 320px').toBeLessThanOrEqual(24)
+         |                                                         ^
+      47 |     expect.soft(small.padRight, 'right padding at 320px').toBeLessThanOrEqual(24)
+      48 |     expect.soft(small.padTop, 'top padding at 320px').toBeLessThanOrEqual(64)
+      49 |     expect.soft(small.padBottom, 'bottom padding at 320px').toBeLessThanOrEqual(64)
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:46:57)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:45:9
+
+    Error: right padding at 320px
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 24
+    Received:    64
+
+      45 |   await check(page, '01-mobile-320-main-padding', async () => {
+      46 |     expect.soft(small.padLeft, 'left padding at 320px').toBeLessThanOrEqual(24)
+    > 47 |     expect.soft(small.padRight, 'right padding at 320px').toBeLessThanOrEqual(24)
+         |                                                           ^
+      48 |     expect.soft(small.padTop, 'top padding at 320px').toBeLessThanOrEqual(64)
+      49 |     expect.soft(small.padBottom, 'bottom padding at 320px').toBeLessThanOrEqual(64)
+      50 |   })
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:47:59)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:45:9
+
+    Error: top padding at 320px
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 64
+    Received:    128
+
+      46 |     expect.soft(small.padLeft, 'left padding at 320px').toBeLessThanOrEqual(24)
+      47 |     expect.soft(small.padRight, 'right padding at 320px').toBeLessThanOrEqual(24)
+    > 48 |     expect.soft(small.padTop, 'top padding at 320px').toBeLessThanOrEqual(64)
+         |                                                       ^
+      49 |     expect.soft(small.padBottom, 'bottom padding at 320px').toBeLessThanOrEqual(64)
+      50 |   })
+      51 |
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:48:55)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:45:9
+
+    Error: bottom padding at 320px
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 64
+    Received:    128
+
+      47 |     expect.soft(small.padRight, 'right padding at 320px').toBeLessThanOrEqual(24)
+      48 |     expect.soft(small.padTop, 'top padding at 320px').toBeLessThanOrEqual(64)
+    > 49 |     expect.soft(small.padBottom, 'bottom padding at 320px').toBeLessThanOrEqual(64)
+         |                                                             ^
+      50 |   })
+      51 |
+      52 |   await check(page, '02-mobile-320-content-column', async () => {
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:49:61)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:45:9
+
+    Error: content column width at 320px
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 270
+    Received:    192
+
+      51 |
+      52 |   await check(page, '02-mobile-320-content-column', async () => {
+    > 53 |     expect.soft(small.contentWidth, 'content column width at 320px').toBeGreaterThanOrEqual(270)
+         |                                                                      ^
+      54 |     expect.soft(small.headlineLines, 'headline line count at 320px').toBeLessThanOrEqual(2)
+      55 |   })
+      56 |
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:53:70)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:52:9
+
+    Error: headline line count at 320px
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 2
+    Received:    4
+
+      52 |   await check(page, '02-mobile-320-content-column', async () => {
+      53 |     expect.soft(small.contentWidth, 'content column width at 320px').toBeGreaterThanOrEqual(270)
+    > 54 |     expect.soft(small.headlineLines, 'headline line count at 320px').toBeLessThanOrEqual(2)
+         |                                                                      ^
+      55 |   })
+      56 |
+      57 |   await check(page, '03-mobile-320-no-horizontal-scroll', async () => {
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:54:70)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:52:9
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/pw-before/KAN-12-KAN-12-main-padding-1135a--and-is-unchanged-at-1280px-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    ../runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/pw-before/KAN-12-KAN-12-main-padding-1135a--and-is-unchanged-at-1280px-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/pw-before/KAN-12-KAN-12-main-padding-1135a--and-is-unchanged-at-1280px-chromium/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/pw-before/KAN-12-KAN-12-main-padding-1135a--and-is-unchanged-at-1280px-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace ../runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/pw-before/KAN-12-KAN-12-main-padding-1135a--and-is-unchanged-at-1280px-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › ../runs/KAN-12/2026-09-04T20-34-42-094Z/evidence/witness/KAN-12.spec.mjs:36:1 › KAN-12 <main> padding shrinks at 320px and is unchanged at 1280px 
