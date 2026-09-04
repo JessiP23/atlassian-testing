@@ -1,0 +1,88 @@
+name: Agent — readiness check
+
+# Run this FIRST on any new repo or Jira project, before spending anything.
+#
+# It touches all four external systems the agent depends on — Jira, GitHub, Bedrock, the runner —
+# and prints one table saying which are wired and, for each that is not, the exact fix. The table
+# goes to the job summary, so it is something you can screenshot into a thread with whoever owns
+# the credential you are missing.
+#
+# Costs a fraction of a cent: the Bedrock checks are 8-token pings.
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_key:
+        description: A Jira issue key you can see (checks read access, and prints the board's real column names)
+        required: false
+        type: string
+      test_comment:
+        description: Also post a test comment on that ticket, to prove WRITE access
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  PAG_ENV_PRECEDENCE: env
+  PAG_ALLOWED_REMOTE: ${{ vars.PAG_ALLOWED_REMOTE || github.repository }}
+  PAG_MODEL_FAST: ${{ vars.BEDROCK_HAIKU_MODEL || 'us.anthropic.claude-haiku-4-5-20251001-v1:0' }}
+  PAG_MODEL_HEAVY: ${{ vars.BEDROCK_OPUS_MODEL || 'us.anthropic.claude-opus-5' }}
+  PAG_UI_EVIDENCE: ${{ vars.PAG_UI_EVIDENCE || '1' }}
+  # A readiness check should report "unreachable" in seconds, not sit through the full retry ladder.
+  PAG_BEDROCK_ATTEMPTS: '2'
+  JIRA_URL: ${{ secrets.JIRA_BASE_URL || vars.JIRA_BASE_URL }}
+  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: agent/graph/package-lock.json
+
+      - run: |
+          npm --prefix agent/graph ci --no-audit --no-fund --prefer-offline
+          npm install -g @anthropic-ai/claude-code@${{ vars.CLAUDE_CODE_VERSION || 'latest' }}
+
+      - name: Cache the Playwright browser
+        if: env.PAG_UI_EVIDENCE == '1'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('agent/graph/package-lock.json') }}
+
+      - name: Playwright + ffmpeg
+        if: env.PAG_UI_EVIDENCE == '1'
+        run: |
+          npx --prefix agent/graph playwright install --with-deps chromium
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: AWS credentials for Bedrock
+        continue-on-error: true    # a missing role must show up as a FAIL row, not a dead job
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Readiness
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          cd agent/graph
+          node bin/doctor.mjs \
+            --repo "$GITHUB_WORKSPACE" \
+            ${{ inputs.issue_key && format('--key {0}', inputs.issue_key) || '' }} \
+            ${{ inputs.test_comment && '--comment' || '' }}

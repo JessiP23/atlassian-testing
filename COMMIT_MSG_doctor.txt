@@ -1,0 +1,41 @@
+feat(doctor): one command that says which of the four systems is not wired
+
+Moving onto a company Jira and a company GitHub org means every credential belongs to somebody
+else, and "it didn't work" is not a useful thing to report to the person who owns it. bin/doctor.mjs
+touches all four external systems the agent depends on and prints one table: system, verdict, and
+for anything that failed, the exact fix. In CI it also writes the table to the job summary, so the
+output is something you can screenshot into a thread.
+
+What it catches that a run would only tell you about after spending money:
+
+  Jira    credentials present and CLEAN (a token pasted with quotes still works via the sanitiser,
+          but the stored secret is wrong and will break anything that reads it directly); the issue
+          is readable through whichever base the token needs; and the board's REAL transition names,
+          printed, because nobody can guess those for you and they are what PAG_JIRA_TRANSITION and
+          PAG_JIRA_DONE have to be set to. --comment proves write access, which is a separate scope
+          from read and is only ever really proven by writing.
+          A 404 on an issue read is called out as "probably no permission on that PROJECT" — Jira
+          answers 404, not 403, for an issue you may not see, and that has cost hours before.
+
+  GitHub  the token can read the repo AND push; origin matches PAG_ALLOWED_REMOTE (the guard that
+          stops a worktree pushing to the upstream production repo it inherited); and — the one
+          that is invisible when it is wrong — whether the workflow files exist ON THE DEFAULT
+          BRANCH. repository_dispatch only fires workflows that are on the default branch. A perfect
+          workflow on a feature branch never runs and there is no error anywhere saying why.
+
+  Bedrock each configured model actually answers, with the failure classified: not authorized ->
+          IAM, ValidationException / inference profile -> the model is not enabled in that
+          account and region, expired token -> credentials. Two 8-token pings, a fraction of a cent.
+
+  Runner  profile detection and the gate commands it resolved, the claude-code CLI the patch node
+          shells out to, ffmpeg, and the Playwright browser when the witness is on.
+
+FAIL exits 1; WARN never fails the job, because "no unit test runner in this repo" is a fact about
+the repo, not a fault.
+
+.github/workflows/agent-preflight.yml runs it on demand with an optional issue key. The AWS
+credentials step is continue-on-error on purpose: a missing role must appear as a FAIL row in the
+table with the rest, not kill the job before the table is printed.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T
