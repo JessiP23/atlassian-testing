@@ -1,0 +1,447 @@
+
+Running 1 test using 1 worker
+
+  ✘  1 [chromium] › ../runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:66:1 › KAN-11 asset lookup on the home page (1.4m)
+
+
+  1) [chromium] › ../runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:66:1 › KAN-11 asset lookup on the home page 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByLabel(/search|look ?up|asset|tag/i).or(getByRole('searchbox')).first()
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "soft toBeVisible" with timeout 5000ms
+      - waiting for getByLabel(/search|look ?up|asset|tag/i).or(getByRole('searchbox')).first()
+
+
+      85 |     // Criterion 4: a labelled search input, above the existing home page content.
+      86 |     const input = searchInput(page)
+    > 87 |     await expect.soft(input).toBeVisible({ timeout: 5_000 })
+         |                              ^
+      88 |     expect.soft(await page.getByLabel(/search|look ?up|asset|tag/i).count(), 'search input has a label').toBeGreaterThan(0)
+      89 |     // Criterion 11: the existing content is still there, and still below the lookup.
+      90 |     const heading = page.getByRole('heading', { level: 1 })
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:87:30)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:84:9
+
+    Error: search input has a label
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+      86 |     const input = searchInput(page)
+      87 |     await expect.soft(input).toBeVisible({ timeout: 5_000 })
+    > 88 |     expect.soft(await page.getByLabel(/search|look ?up|asset|tag/i).count(), 'search input has a label').toBeGreaterThan(0)
+         |                                                                                                          ^
+      89 |     // Criterion 11: the existing content is still there, and still below the lookup.
+      90 |     const heading = page.getByRole('heading', { level: 1 })
+      91 |     await expect.soft(heading).toContainText(/to get started, edit the/i)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:88:106
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:84:3
+
+    Error: lookup sits above the existing content
+
+    expect(received).toBeLessThan(expected)
+
+    Expected: < 351.5
+    Received:   Infinity
+
+      94 |     const box = await input.boundingBox().catch(() => null)
+      95 |     const headingBox = await heading.boundingBox()
+    > 96 |     expect.soft(box?.y ?? Number.POSITIVE_INFINITY, 'lookup sits above the existing content').toBeLessThan(headingBox.y)
+         |                                                                                               ^
+      97 |   })
+      98 |
+      99 |   // Criterion 6: a loading message while the request is in flight. The response is held back so the
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:96:95
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:84:3
+
+    [02-loading-in-flight] locator.waitFor: Timeout 5000ms exceeded.
+    Call log:
+      - waiting for getByLabel(/search|look ?up|asset|tag/i).or(getByRole('searchbox')).first() to be visible
+
+
+    Error: AP-1001 listed
+
+    expect(locator).toBeVisible() failed
+
+    Locator: getByText('AP-1001').first()
+    Expected: visible
+    Timeout: 8000ms
+    Error: element(s) not found
+
+    Call log:
+      - AP-1001 listed with timeout 8000ms
+      - waiting for getByText('AP-1001').first()
+
+
+      114 |     // Criteria 2, 3, 5: a lowercase query lists every seeded AP asset with tag, name and location.
+      115 |     for (const tag of KNOWN_TAGS) {
+    > 116 |       await expect.soft(page.getByText(tag, { exact: false }).first(), `${tag} listed`).toBeVisible({ timeout: 8_000 })
+          |                                                                                         ^
+      117 |     }
+      118 |     const first = asset('AP-1001')
+      119 |     if (first) {
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:116:89)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:113:9
+
+    Error: AP-1002 listed
+
+    expect(locator).toBeVisible() failed
+
+    Locator: getByText('AP-1002').first()
+    Expected: visible
+    Timeout: 8000ms
+    Error: element(s) not found
+
+    Call log:
+      - AP-1002 listed with timeout 8000ms
+      - waiting for getByText('AP-1002').first()
+
+
+      114 |     // Criteria 2, 3, 5: a lowercase query lists every seeded AP asset with tag, name and location.
+      115 |     for (const tag of KNOWN_TAGS) {
+    > 116 |       await expect.soft(page.getByText(tag, { exact: false }).first(), `${tag} listed`).toBeVisible({ timeout: 8_000 })
+          |                                                                                         ^
+      117 |     }
+      118 |     const first = asset('AP-1001')
+      119 |     if (first) {
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:116:89
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:113:3
+
+    Error: AP-2010 listed
+
+    expect(locator).toBeVisible() failed
+
+    Locator: getByText('AP-2010').first()
+    Expected: visible
+    Timeout: 8000ms
+    Error: element(s) not found
+
+    Call log:
+      - AP-2010 listed with timeout 8000ms
+      - waiting for getByText('AP-2010').first()
+
+
+      114 |     // Criteria 2, 3, 5: a lowercase query lists every seeded AP asset with tag, name and location.
+      115 |     for (const tag of KNOWN_TAGS) {
+    > 116 |       await expect.soft(page.getByText(tag, { exact: false }).first(), `${tag} listed`).toBeVisible({ timeout: 8_000 })
+          |                                                                                         ^
+      117 |     }
+      118 |     const first = asset('AP-1001')
+      119 |     if (first) {
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:116:89
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:113:3
+
+    Error: AP-2011 listed
+
+    expect(locator).toBeVisible() failed
+
+    Locator: getByText('AP-2011').first()
+    Expected: visible
+    Timeout: 8000ms
+    Error: element(s) not found
+
+    Call log:
+      - AP-2011 listed with timeout 8000ms
+      - waiting for getByText('AP-2011').first()
+
+
+      114 |     // Criteria 2, 3, 5: a lowercase query lists every seeded AP asset with tag, name and location.
+      115 |     for (const tag of KNOWN_TAGS) {
+    > 116 |       await expect.soft(page.getByText(tag, { exact: false }).first(), `${tag} listed`).toBeVisible({ timeout: 8_000 })
+          |                                                                                         ^
+      117 |     }
+      118 |     const first = asset('AP-1001')
+      119 |     if (first) {
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:116:89
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:113:3
+
+    Error: AP-3300 listed
+
+    expect(locator).toBeVisible() failed
+
+    Locator: getByText('AP-3300').first()
+    Expected: visible
+    Timeout: 8000ms
+    Error: element(s) not found
+
+    Call log:
+      - AP-3300 listed with timeout 8000ms
+      - waiting for getByText('AP-3300').first()
+
+
+      114 |     // Criteria 2, 3, 5: a lowercase query lists every seeded AP asset with tag, name and location.
+      115 |     for (const tag of KNOWN_TAGS) {
+    > 116 |       await expect.soft(page.getByText(tag, { exact: false }).first(), `${tag} listed`).toBeVisible({ timeout: 8_000 })
+          |                                                                                         ^
+      117 |     }
+      118 |     const first = asset('AP-1001')
+      119 |     if (first) {
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:116:89
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:113:3
+
+    Error: results rendered as a list
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+      123 |     const listish =
+      124 |       (await page.getByRole('listitem').count()) + (await page.getByRole('row').count())
+    > 125 |     expect.soft(listish, 'results rendered as a list').toBeGreaterThan(0)
+          |                                                        ^
+      126 |     // Criterion 6: the loading message is gone once the request completed.
+      127 |     expect.soft(await page.getByText(LOADING).count(), 'loading message cleared').toBe(0)
+      128 |   })
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:125:56
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:113:3
+
+    [04-no-matches] locator.waitFor: Timeout 5000ms exceeded.
+    Call log:
+      - waiting for getByLabel(/search|look ?up|asset|tag/i).or(getByRole('searchbox')).first() to be visible
+
+
+    [05-request-failed] locator.waitFor: Timeout 5000ms exceeded.
+    Call log:
+      - waiting for getByLabel(/search|look ?up|asset|tag/i).or(getByRole('searchbox')).first() to be visible
+
+
+    [06-after-retry-succeeds] locator.click: Timeout 5000ms exceeded.
+    Call log:
+      - waiting for getByRole('button', { name: /retry|try again/i }).first()
+
+
+    Error: GET /api/assets/search reads one of q, query, search, term, s, tag
+
+    expect(received).not.toBeNull()
+
+    Received: null
+
+      165 |   await check(page, '08-route-contract', async () => {
+      166 |     // Criterion 1: the route exists and answers with tag / name / location.
+    > 167 |     expect.soft(param, `GET /api/assets/search reads one of ${PARAM_NAMES.join(', ')}`).not.toBeNull()
+          |                                                                                             ^
+      168 |     const rows = param ? (await get(page, param, 'ap-1001')).rows : null
+      169 |     expect.soft(rows?.length ?? 0, 'a tag query matches').toBeGreaterThan(0)
+      170 |     for (const field of ['tag', 'name', 'location']) {
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:167:93)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    Error: a tag query matches
+
+    expect(received).toBeGreaterThan(expected)
+
+    Expected: > 0
+    Received:   0
+
+      167 |     expect.soft(param, `GET /api/assets/search reads one of ${PARAM_NAMES.join(', ')}`).not.toBeNull()
+      168 |     const rows = param ? (await get(page, param, 'ap-1001')).rows : null
+    > 169 |     expect.soft(rows?.length ?? 0, 'a tag query matches').toBeGreaterThan(0)
+          |                                                           ^
+      170 |     for (const field of ['tag', 'name', 'location']) {
+      171 |       expect.soft(typeof rows?.[0]?.[field], `result has a ${field}`).toBe('string')
+      172 |     }
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:169:59)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    Error: result has a tag
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "string"
+    Received: "undefined"
+
+      169 |     expect.soft(rows?.length ?? 0, 'a tag query matches').toBeGreaterThan(0)
+      170 |     for (const field of ['tag', 'name', 'location']) {
+    > 171 |       expect.soft(typeof rows?.[0]?.[field], `result has a ${field}`).toBe('string')
+          |                                                                       ^
+      172 |     }
+      173 |     // Criterion 3: all six seeded assets, including the five tags the ticket names.
+      174 |     const tags = [...seed.keys()].map((t) => t.toUpperCase())
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:171:71)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    Error: result has a name
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "string"
+    Received: "undefined"
+
+      169 |     expect.soft(rows?.length ?? 0, 'a tag query matches').toBeGreaterThan(0)
+      170 |     for (const field of ['tag', 'name', 'location']) {
+    > 171 |       expect.soft(typeof rows?.[0]?.[field], `result has a ${field}`).toBe('string')
+          |                                                                       ^
+      172 |     }
+      173 |     // Criterion 3: all six seeded assets, including the five tags the ticket names.
+      174 |     const tags = [...seed.keys()].map((t) => t.toUpperCase())
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:171:71)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    Error: result has a location
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "string"
+    Received: "undefined"
+
+      169 |     expect.soft(rows?.length ?? 0, 'a tag query matches').toBeGreaterThan(0)
+      170 |     for (const field of ['tag', 'name', 'location']) {
+    > 171 |       expect.soft(typeof rows?.[0]?.[field], `result has a ${field}`).toBe('string')
+          |                                                                       ^
+      172 |     }
+      173 |     // Criterion 3: all six seeded assets, including the five tags the ticket names.
+      174 |     const tags = [...seed.keys()].map((t) => t.toUpperCase())
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:171:71)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    Error: seed contains AP-1001
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected value: "AP-1001"
+    Received array: []
+
+      173 |     // Criterion 3: all six seeded assets, including the five tags the ticket names.
+      174 |     const tags = [...seed.keys()].map((t) => t.toUpperCase())
+    > 175 |     for (const tag of KNOWN_TAGS) expect.soft(tags, `seed contains ${tag}`).toContain(tag)
+          |                                                                             ^
+      176 |     expect.soft(tags.length, 'six seeded assets').toBeGreaterThanOrEqual(6)
+      177 |
+      178 |     // Criterion 2: case-insensitive, matching anywhere in name and in location too.
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:175:77)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    Error: seed contains AP-1002
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected value: "AP-1002"
+    Received array: []
+
+      173 |     // Criterion 3: all six seeded assets, including the five tags the ticket names.
+      174 |     const tags = [...seed.keys()].map((t) => t.toUpperCase())
+    > 175 |     for (const tag of KNOWN_TAGS) expect.soft(tags, `seed contains ${tag}`).toContain(tag)
+          |                                                                             ^
+      176 |     expect.soft(tags.length, 'six seeded assets').toBeGreaterThanOrEqual(6)
+      177 |
+      178 |     // Criterion 2: case-insensitive, matching anywhere in name and in location too.
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:175:77)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    Error: seed contains AP-2010
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected value: "AP-2010"
+    Received array: []
+
+      173 |     // Criterion 3: all six seeded assets, including the five tags the ticket names.
+      174 |     const tags = [...seed.keys()].map((t) => t.toUpperCase())
+    > 175 |     for (const tag of KNOWN_TAGS) expect.soft(tags, `seed contains ${tag}`).toContain(tag)
+          |                                                                             ^
+      176 |     expect.soft(tags.length, 'six seeded assets').toBeGreaterThanOrEqual(6)
+      177 |
+      178 |     // Criterion 2: case-insensitive, matching anywhere in name and in location too.
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:175:77)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    Error: seed contains AP-2011
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected value: "AP-2011"
+    Received array: []
+
+      173 |     // Criterion 3: all six seeded assets, including the five tags the ticket names.
+      174 |     const tags = [...seed.keys()].map((t) => t.toUpperCase())
+    > 175 |     for (const tag of KNOWN_TAGS) expect.soft(tags, `seed contains ${tag}`).toContain(tag)
+          |                                                                             ^
+      176 |     expect.soft(tags.length, 'six seeded assets').toBeGreaterThanOrEqual(6)
+      177 |
+      178 |     // Criterion 2: case-insensitive, matching anywhere in name and in location too.
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:175:77)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    Error: seed contains AP-3300
+
+    expect(received).toContain(expected) // indexOf
+
+    Expected value: "AP-3300"
+    Received array: []
+
+      173 |     // Criterion 3: all six seeded assets, including the five tags the ticket names.
+      174 |     const tags = [...seed.keys()].map((t) => t.toUpperCase())
+    > 175 |     for (const tag of KNOWN_TAGS) expect.soft(tags, `seed contains ${tag}`).toContain(tag)
+          |                                                                             ^
+      176 |     expect.soft(tags.length, 'six seeded assets').toBeGreaterThanOrEqual(6)
+      177 |
+      178 |     // Criterion 2: case-insensitive, matching anywhere in name and in location too.
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:175:77)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    Error: six seeded assets
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 6
+    Received:    0
+
+      174 |     const tags = [...seed.keys()].map((t) => t.toUpperCase())
+      175 |     for (const tag of KNOWN_TAGS) expect.soft(tags, `seed contains ${tag}`).toContain(tag)
+    > 176 |     expect.soft(tags.length, 'six seeded assets').toBeGreaterThanOrEqual(6)
+          |                                                   ^
+      177 |
+      178 |     // Criterion 2: case-insensitive, matching anywhere in name and in location too.
+      179 |     const sample = asset('AP-1001')
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:176:51)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:165:9
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/pw-before/KAN-11-KAN-11-asset-lookup-on-the-home-page-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    ../runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/pw-before/KAN-11-KAN-11-asset-lookup-on-the-home-page-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/pw-before/KAN-11-KAN-11-asset-lookup-on-the-home-page-chromium/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/pw-before/KAN-11-KAN-11-asset-lookup-on-the-home-page-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace ../runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/pw-before/KAN-11-KAN-11-asset-lookup-on-the-home-page-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › ../runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:66:1 › KAN-11 asset lookup on the home page 

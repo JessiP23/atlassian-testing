@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [chromium] › ../runs/KAN-11/2026-09-04T20-14-31-103Z/evidence/witness/KAN-11.spec.mjs:66:1 › KAN-11 asset lookup on the home page (5.3s)
+
+  1 passed (6.0s)
