@@ -15,6 +15,10 @@ export default {
 
   isUi: (p) => /^packages\/clients\/web-app\//.test(p),
 
+  // 223 projects: baselining in-run is out of the question. bin/refresh.mjs does it per merge, for
+  // the projects `nx affected` says a merge actually touched.
+  baselineAll: false,
+
   ownerOf(repo, file) {
     let dir = path.dirname(path.join(repo, file))
     const stop = path.resolve(repo)

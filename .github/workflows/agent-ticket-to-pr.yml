@@ -63,7 +63,8 @@ env:
   # Budgets: dollars and minutes. A node with no time left refuses instead of finishing late.
   PAG_CAP_USD: ${{ vars.PAG_CAP_USD || '15' }}
   PAG_RESERVE_USD: ${{ vars.PAG_RESERVE_USD || '2' }}
-  PAG_MAX_MINUTES: ${{ vars.PAG_MAX_MINUTES || '20' }}
+  PAG_MAX_MINUTES: ${{ vars.PAG_MAX_MINUTES || '30' }}
+  PAG_REPRO_MINUTES: ${{ vars.PAG_REPRO_MINUTES || '7' }}
   # Evidence. Screenshots + video for UI tickets; without an app login the witness is restricted to
   # pages that need no auth (/, /login, /signup), which is exactly right for this app.
   PAG_UI_EVIDENCE: ${{ vars.PAG_UI_EVIDENCE || '1' }}

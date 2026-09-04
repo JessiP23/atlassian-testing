@@ -23,6 +23,10 @@ export default {
 
   // One project. Keeps the per-project baseline store and the scoped gate working unchanged.
   ownerOf: () => 'app',
+
+  // One small package: running the whole gate on the clean checkout costs under a minute, so a run
+  // can record its own baseline and never blame the patch for a failure that was already there.
+  baselineAll: true,
   typeConsumersFor: () => [],
 
   gate(repo) {

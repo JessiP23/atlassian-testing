@@ -1,0 +1,35 @@
+fix(gate): baseline the clean checkout, cap the witness clock, ignore agent/ in lint
+
+KAN-6 wrote the theme toggle, the frozen witness went from red to GREEN with
+eight paired screenshots and a GIF — and the run still refused. Three causes.
+
+1. `npm run lint` lints the WHOLE repo, and the only ESLint ERROR in it was in
+   the agent's own vendored source: eslint-config-next reads the Playwright
+   fixture `await use(page)` as a misused React hook. So a correct patch was
+   blamed for a failure it could not have caused, on every ticket, forever.
+   agent/** is now ignored by eslint.config.mjs — the agent is tooling here, not
+   product code. `npx eslint` is clean.
+
+2. That is the specific fix; this is the general one. lint / typecheck / build
+   used to be treated as unambiguous ("nothing pre-existing survives nx affected
+   on a clean main"), which is false whenever the gate command covers more than
+   the patch. bin/ci.mjs now runs the whole gate on the CLEAN checkout before
+   anything is edited and records the result per project at TARGET granularity
+   (`app:lint`), and verify subtracts it: a target that already failed on the
+   pinned commit is reported as pre-existing and the gate continues. Only for
+   profiles that declare `baselineAll` (nextjs: under a minute); on nx the
+   refresher still owns baselining, per merge.
+
+   Proven on this repo: the baseline recorded `app:build` as already failing
+   (Next cannot load its SWC binary on this arch), which under the old rule would
+   have been charged to the next patch.
+
+3. Time. The witness iterated for 566s of the 1200s budget and left repair 149s,
+   which is not enough to fix anything — so the run died on the clock with a
+   green witness and a fixable lint error. reproduce now has its own ceiling
+   (PAG_REPRO_MINUTES, default 7) separate from the run's, and the workflow's
+   default budget is 30 minutes. Writing the test is worth minutes; it is not
+   worth the whole run.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

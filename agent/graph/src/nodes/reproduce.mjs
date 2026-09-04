@@ -35,6 +35,11 @@ import { loadProfile } from '../../profiles/index.mjs'
 const exec = promisify(execFile)
 const ATTEMPTS = Number(process.env.PAG_REPRO_ATTEMPTS || 2)
 const REPRO_BUDGET = Number(process.env.PAG_REPRO_BUDGET || 1.5)
+// Its own wall-clock ceiling, separate from the run's. On KAN-6 the witness iterated for 566s of a
+// 1200s budget (oklch colours, then per-assertion timeouts) and left repair 149s, which is not
+// enough to fix anything. Writing the test is worth minutes; it is not worth the whole run.
+const REPRO_MS = Number(process.env.PAG_REPRO_MINUTES || 7) * 60_000
+const capped = (ms) => Math.min(ms, REPRO_MS)
 
 const UI_EVIDENCE = process.env.PAG_UI_EVIDENCE === '1'
 
@@ -186,7 +191,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
     let previous = ''
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       const allowance = Math.min(REPRO_BUDGET, budget.availableFor('repro'))
-      const timeMs = budget.timeFor('repro')
+      const timeMs = capped(budget.timeFor('repro'))
       if (allowance < 0.3 || timeMs < 60_000) {
         return { repro: { status: 'none', reason: `skipped: $${allowance.toFixed(2)} / ${(timeMs / 1000).toFixed(0)}s left`, rung } }
       }
@@ -262,7 +267,7 @@ async function witness(s, { budget, onProgress, appUrl }) {
   let previous = ''
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const allowance = Math.min(REPRO_BUDGET, budget.availableFor('repro'))
-    const timeMs = budget.timeFor('repro')
+    const timeMs = capped(budget.timeFor('repro'))
     if (allowance < 0.3 || timeMs < 90_000) return null
 
     onProgress(`witness attempt ${attempt}/${ATTEMPTS} -> ${specFile}`)

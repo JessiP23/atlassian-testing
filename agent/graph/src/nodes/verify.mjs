@@ -116,12 +116,29 @@ export function verifyNode({ onProgress = () => {} } = {}) {
       const { ok, out } = await run(s.repo, argv, timeout)
       if (ok) continue
 
-      // lint/build failures are unambiguous: nothing pre-existing gets past `nx affected` on a
-      // clean main, and a compile error in an owned project is always the patch's.
+      // lint / typecheck / build used to be treated as unambiguous — "nothing pre-existing gets
+      // past nx affected on a clean main". That is false wherever the gate command covers more than
+      // the patch: `npm run lint` lints the WHOLE repo, and on KAN-6 the only error was in the
+      // agent's own vendored source, so a correct patch was blamed for it and the run burned its
+      // remaining budget in repair trying to fix something it had not broken.
+      //
+      // So these targets are baseline-subtracted too, at TARGET granularity (`app:lint`): if the
+      // same target already failed on the pinned commit, it is pre-existing and the gate continues.
       if (target !== 'test') {
+        const preExistingTargets = projects.map((p) => `${p}:${target}`).filter((id) => baseTasks.has(id))
+        if (preExistingTargets.length === projects.length) {
+          onProgress(`gate ${target}: failed, but ${preExistingTargets.join(', ')} already failed on ${String(s.baseSha).slice(0, 7)} — pre-existing, not this patch`)
+          continue
+        }
+        const mine = projects.filter((p) => !baseTasks.has(`${p}:${target}`))
         return {
           scope, evidence,
-          gate: { ok: false, target, summary: `${target} failed in ${projects.join(', ')}`, newFailures: [], preExisting: [], logTail: out.slice(-8000) },
+          gate: {
+            ok: false, target,
+            summary: `${target} failed in ${mine.join(', ')}`
+              + (preExistingTargets.length ? ` (${preExistingTargets.join(', ')} was already failing on ${String(s.baseSha).slice(0, 7)} and is ignored)` : ''),
+            newFailures: [], preExisting: preExistingTargets, logTail: out.slice(-8000),
+          },
         }
       }
 

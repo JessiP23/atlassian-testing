@@ -27,6 +27,7 @@ import { buildGraph } from '../src/graph.mjs'
 import { Budget } from '../src/lib/budget.mjs'
 import { NODE_TIER, TIERS } from '../src/lib/models.mjs'
 import * as snap from '../src/lib/snapshot.mjs'
+import { parseFailures, parseFailedTasks } from '../src/lib/baseline.mjs'
 import { Trace } from '../src/lib/trace.mjs'
 import { loadProfile } from '../profiles/index.mjs'
 import { stopApp } from '../src/lib/app.mjs'
@@ -36,7 +37,7 @@ const argv = process.argv.slice(2)
 const flag = (n, d) => { const i = argv.indexOf(`--${n}`); return i === -1 ? d : (argv[i + 1]?.startsWith('--') ? true : argv[i + 1]) }
 const has = (n) => argv.includes(`--${n}`)
 
-const KNOWN = new Set(['repo', 'base', 'target', 'slug', 'dry-run', 'skip-index'])
+const KNOWN = new Set(['repo', 'base', 'target', 'slug', 'dry-run', 'skip-index', 'skip-baseline'])
 for (let i = 0; i < argv.length; i++) {
   if (!argv[i].startsWith('--')) continue
   const name = argv[i].slice(2)
@@ -73,10 +74,55 @@ if (!has('skip-index')) {
   console.log(`  index: ${n} file(s) in ${((Date.now() - t0) / 1000).toFixed(0)}s`)
 }
 
-// ---- 2. pin at HEAD --------------------------------------------------------------------------
-snap.writePin({ sha: baseSha, base: baseBranch, indexedAt: new Date().toISOString(), projects: 0 })
+// ---- 2. baseline the gate on the CLEAN checkout ----------------------------------------------
+//
+// Without this, every failure the gate sees is attributed to the patch. On KAN-6 the only lint
+// error in the repo was in the agent's own vendored source — `npm run lint` covers the whole repo —
+// so a correct patch was blamed for it, repair spent its budget trying to fix code it had not
+// touched, and the run died on the clock. Recording what already fails, before anything is edited,
+// is the difference between "N failures" and "N NEW failures".
+//
+// Only for profiles where the whole gate is cheap (nextjs: under a minute). On an nx monorepo this
+// is the refresher's job, per merge, for the projects a merge actually affected.
+let baselined = 0
+if (profile.baselineAll && !has('skip-baseline')) {
+  const { execFile } = await import('node:child_process')
+  const run = (argv) => new Promise((resolve) => {
+    execFile('npx', argv, { cwd: repo, maxBuffer: 1 << 26, timeout: 8 * 60_000 }, (err, stdout, stderr) => {
+      resolve({ ok: !err, out: `${stdout || ''}${stderr || ''}` })
+    })
+  })
 
-// ---- 3. run ----------------------------------------------------------------------------------
+  const plan = profile.gate(repo, { owners: ['app'], typeConsumers: [] })
+  const failingTargets = new Set()
+  const failingTests = new Set()
+  const t1 = Date.now()
+  for (const { target, projects, argv } of plan) {
+    const { ok, out } = await run(argv)
+    if (ok) continue
+    for (const p of projects) failingTargets.add(`${p}:${target}`)
+    if (target === 'test') {
+      for (const id of parseFailures(out)) failingTests.add(id)
+      for (const id of parseFailedTasks(out)) failingTargets.add(id)
+    }
+  }
+  for (const p of [...new Set(plan.flatMap((x) => x.projects))]) {
+    snap.writeProject(p, {
+      sha: baseSha,
+      failed: [...failingTargets].some((id) => id.startsWith(`${p}:`)),
+      tasks: [...failingTargets].filter((id) => id.startsWith(`${p}:`)),
+      tests: [...failingTests],
+    })
+    baselined++
+  }
+  console.log(`  baseline: ${baselined} project(s) in ${((Date.now() - t1) / 1000).toFixed(0)}s`
+    + (failingTargets.size ? ` — already failing on ${baseSha.slice(0, 7)}: ${[...failingTargets].join(', ')}` : ' — all green'))
+}
+
+// ---- 3. pin at HEAD --------------------------------------------------------------------------
+snap.writePin({ sha: baseSha, base: baseBranch, indexedAt: new Date().toISOString(), projects: baselined })
+
+// ---- 4. run ----------------------------------------------------------------------------------
 const budget = new Budget()
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const trace = new Trace({ issueKey, runId })
