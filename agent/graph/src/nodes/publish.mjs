@@ -413,6 +413,38 @@ export function publishNode({ budget, dryRun = false }) {
       onProgress: (l) => console.error(l),
     })
 
+    // ---- the same branch, a second PR into a lower environment --------------------------------
+    //
+    // Asset Panda's flow: the fix branches from main and its PR targets main, and a SECOND PR from
+    // THE SAME BRANCH targets qa so the change can be deployed and tested on a lower environment
+    // before it lands. One branch, two destinations — not a cherry-pick and not a second run, so
+    // the two PRs can never drift apart.
+    //
+    // Best-effort by construction: a missing target branch, or a repo without a qa at all, must not
+    // fail a run whose primary PR is already open. PAG_PR_EXTRA_TARGETS is a comma-separated list;
+    // empty disables it entirely.
+    const extraTargets = (process.env.PAG_PR_EXTRA_TARGETS || '')
+      .split(',').map((x) => x.trim()).filter(Boolean)
+      .filter((t) => t !== s.prTargetBranch)      // never open a PR from a branch into itself
+    const extraPrs = []
+    for (const t of extraTargets) {
+      const note = [
+        `> **Lower-environment copy.** Same branch as ${prUrl}, targeting \`${t}\` so this can be`,
+        `> deployed and tested before it lands on \`${s.prTargetBranch}\`. Reviewing it twice is not`,
+        '> necessary — read it there, test it here.',
+        '',
+      ].join('\n')
+      const r = await createOrUpdatePr({
+        repo: s.repo, allowed, branch, base: t,
+        title: `${pr.title} [-> ${t}]`.slice(0, 100), body: note + fullBody, draft: true,
+        onProgress: (l) => console.error(l),
+      }).catch((e) => {
+        console.error(`second PR into ${t} not opened: ${String(e.message).split('\n')[0].slice(0, 140)}`)
+        return null
+      })
+      if (r) { extraPrs.push({ target: t, url: r.url }); console.error(`jira: also opened ${r.url} -> ${t}`) }
+    }
+
     // Labels are best-effort: a fine-grained token without issues:write cannot create them, and a
     // missing label must never fail a PR that is already open. The body's first line carries the
     // same information regardless.
@@ -428,7 +460,9 @@ export function publishNode({ budget, dryRun = false }) {
           label === 'evidence:none' ? 'A03A32' : label === 'agent:incomplete' ? '8A6A12' : '2E6B4F',
           '--description', desc[label] || label], { cwd: s.repo })
       }
-      await exec('gh', ['pr', 'edit', prUrl, '--repo', allowed, '--add-label', pr.labels.join(',')], { cwd: s.repo })
+      for (const u of [prUrl, ...extraPrs.map((x) => x.url)]) {
+        await exec('gh', ['pr', 'edit', u, '--repo', allowed, '--add-label', pr.labels.join(',')], { cwd: s.repo })
+      }
     } catch { /* labels are a convenience */ }
 
     // ---- write back to Jira -------------------------------------------------------------------
@@ -449,7 +483,9 @@ export function publishNode({ budget, dryRun = false }) {
         `Spent $${rep.spent.toFixed(2)} in ${mins}m ${secs}s. The diff, the evidence and the remaining failures are in the PR.`,
       ] : [
         `${AGENT} opened a **draft** PR for this ticket.`,
-        '', `**${prUrl}**${updated ? ' _(updated — a run for this ticket had already opened it)_' : ''}`, '',
+        '', `**${prUrl}** -> \`${s.prTargetBranch}\`${updated ? ' _(updated — a run for this ticket had already opened it)_' : ''}`,
+        ...extraPrs.map((x) => `${x.url} -> \`${x.target}\` — same branch, for testing on the lower environment`),
+        '',
         evidenceLine,
         `Gate: ${s.gate?.summary || '—'}`,
         s.gate?.skipped?.length ? `Not run for the clock: ${s.gate.skipped.join(', ')} — CI on the PR covers it.` : '',
@@ -484,6 +520,6 @@ export function publishNode({ budget, dryRun = false }) {
       }
     }
 
-    return { pr, prUrl, branchName: branch }
+    return { pr, prUrl, branchName: branch, extraPrs }
   }
 }

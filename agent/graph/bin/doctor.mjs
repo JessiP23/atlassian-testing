@@ -48,9 +48,11 @@ let cfg = null
 try {
   cfg = jiraConfig()
   ok('credentials present', `${cfg.url} as ${cfg.email}`)
-  if (cfg.dirty) warn('the stored token has quote or whitespace characters in it',
-    'the sanitiser strips them, but the value stored in the secret is wrong',
-    're-paste JIRA_API_TOKEN with no surrounding quotes')
+  // Name the field. "the stored token" was wrong whenever it was JIRA_URL or JIRA_EMAIL that
+  // carried the passenger, and unactionable either way.
+  if (cfg.dirty?.length) warn(`${cfg.dirty.join(', ')} had quotes or whitespace`,
+    'the sanitiser strips them at runtime, so this is not why anything is failing — but the stored value is wrong',
+    `re-save ${cfg.dirty.join(' and ')} with no surrounding quotes and no trailing spaces`)
 } catch (e) {
   bad('credentials', e.message, 'set JIRA_URL / JIRA_EMAIL / JIRA_API_TOKEN as Actions secrets')
 }
