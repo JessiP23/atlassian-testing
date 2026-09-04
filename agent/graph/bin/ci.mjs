@@ -114,6 +114,7 @@ const onProgress = (line) => {
 const graph = buildGraph({ budget, checkpointer: new MemorySaver(), trace, dryRun, onProgress })
 const t0 = Date.now()
 let final = {}
+let crashed = null
 try {
   for await (const chunk of await graph.stream(
     { issueKey, repo, baseBranch, prTargetBranch, baseSha, branchName: `${process.env.PAG_BRANCH_PREFIX || 'agent/'}${issueKey}-${slug}` },
@@ -130,6 +131,16 @@ try {
     }
     trace.timeline(budget.report())
   }
+} catch (err) {
+  // A node that throws must not take the run's REPORT with it. The first CI run on KAN-6 died on a
+  // Bedrock 503 with a bare stack trace: no timeline, no artifact worth reading, exit 1 from an
+  // unhandled rejection. A throw is now just another terminal outcome — recorded, summarised, and
+  // exited with the refusal code so the workflow's summary and artifact steps still run.
+  crashed = { at: 'unknown', reason: err?.name || 'node_threw', detail: String(err?.message || err).slice(0, 2000) }
+  final = { ...final, refusal: crashed }
+  console.error(`\n  CRASHED: ${crashed.reason}\n  ${crashed.detail}\n`)
+  trace.note('ci', `CRASHED ${crashed.reason}: ${crashed.detail}`)
+  trace.timeline(budget.report())
 } finally {
   stopApp()
 }

@@ -1,0 +1,26 @@
+fix(bedrock): treat a 503 as a wait, and never let a node's throw eat the report
+
+KAN-6 died at intake with ServiceUnavailableException. That is Bedrock saying the
+region has no capacity for that model right now — not a bad request, and not a
+regression in the pipeline. Two things were wrong with how we met it.
+
+The waiting was theatre. The retry loop existed but backed off by
+`random() * 500ms * 2^attempt`, so four attempts could finish inside a second;
+the SDK's own three attempts spent 106 MILLISECONDS in total. Capacity needs
+seconds. Backoff is now 1.5s / 3s / 6s / 12s / 24s with jitter, six attempts.
+
+And it only ever asked one endpoint. Cross-region inference profiles exist for
+exactly this case: `us.<id>` is served from US regions, `global.<id>` from
+wherever there is room, the bare id is in-region only. A 503 now walks that
+chain — two attempts per profile — and the id that answers is remembered for the
+process so one run never pays the discovery twice. Verified against a stubbed
+client: us. -> us. -> global. -> global. -> bare, recovered on the fifth attempt
+after 18.8s. The final error says it was capacity and names the profiles tried.
+
+Separately, bin/ci.mjs now catches a throw from any node: the run records it as a
+terminal refusal, writes the timeline, and exits 3. Before, an unhandled
+rejection printed a stack trace and exited 1 with no timeline and a two-file
+artifact — the failure destroyed the record of the failure.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

@@ -18,13 +18,44 @@
 
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime'
 
-const client = new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-east-1' })
+// maxAttempts is the SDK's own retry, which uses milliseconds of backoff — useful for a blip,
+// useless for capacity. The loop below owns the real waiting.
+const client = new BedrockRuntimeClient({
+  region: process.env.AWS_REGION || 'us-east-1',
+  maxAttempts: 3,
+})
 
 const noTemperature = new Set(['us.anthropic.claude-opus-5', 'us.xai.grok-4.6'])
 const isReasoning = (id) => /gpt-oss|qwen3|deepseek[.-]r|grok|\bo[134]\b|reasoning|thinking/i.test(id)
 
 export const usage = { inputTokens: 0, outputTokens: 0, calls: 0, throttled: 0 }
 export const resetUsage = () => Object.assign(usage, { inputTokens: 0, outputTokens: 0, calls: 0, throttled: 0 })
+
+// CAPACITY IS NOT AN ERROR, IT IS A WAIT.
+//
+// A run died at intake with `ServiceUnavailableException` (503) after the SDK's three attempts and
+// 106 MILLISECONDS of total backoff. 503 from Bedrock means the region has no capacity for that
+// model right now; the answer is to wait seconds, not milliseconds, and then to try the same model
+// through a different inference profile before giving up.
+//
+// Cross-region profiles exist exactly for this: `us.<id>` is served from US regions, `global.<id>`
+// from wherever there is room, and the bare id is in-region only. When one is saturated another
+// usually is not, so a 503 walks the list. Whichever id answers is remembered for the process, so
+// one run does not pay the discovery twice.
+const RETRYABLE = /Throttling|TooManyRequests|ServiceUnavailable|ModelNotReady|InternalServer|Timeout/i
+const ATTEMPTS = Number(process.env.PAG_BEDROCK_ATTEMPTS || 6)
+const resolved = new Map()
+
+/** us.foo -> [us.foo, global.foo, foo] · global.foo -> [global.foo, us.foo, foo] · foo -> [foo] */
+function profileChain(model) {
+  const bare = String(model).replace(/^(us|eu|apac|global)\./, '')
+  const chain = [model]
+  for (const alt of [`global.${bare}`, `us.${bare}`, bare]) if (!chain.includes(alt)) chain.push(alt)
+  return chain
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const backoff = (attempt) => Math.min(30_000, 1_500 * 2 ** attempt) * (0.5 + Math.random() / 2)
 
 /**
  * @param {{model:string, system:string, user:string, maxTokens?:number, json?:boolean}} args
@@ -42,26 +73,40 @@ export async function converse({ model, system, user, maxTokens = 4096, json = f
     inferenceConfig,
   }
 
-  for (let attempt = 0; attempt < 4; attempt++) {
+  const chain = resolved.has(model) ? [resolved.get(model)] : profileChain(model)
+  let last = null
+
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    // Walk the profiles as attempts accumulate: same id twice, then the next profile.
+    req.modelId = chain[Math.min(Math.floor(attempt / 2), chain.length - 1)]
     try {
       const res = await client.send(new ConverseCommand(req))
       const text = (res.output?.message?.content || []).map((c) => c.text || '').join('').trim()
       const inTok = res.usage?.inputTokens ?? 0
       const outTok = res.usage?.outputTokens ?? 0
       usage.inputTokens += inTok; usage.outputTokens += outTok; usage.calls++
-      if (!text && attempt < 3) { req.inferenceConfig.maxTokens = budget * 2; continue }
+      resolved.set(model, req.modelId)
+      // Empty text means the output budget went on hidden reasoning: inflate and retry, same id.
+      if (!text && attempt < ATTEMPTS - 1) { req.inferenceConfig.maxTokens = budget * 2; continue }
       return { text, inTok, outTok }
     } catch (err) {
+      last = err
       const name = err?.name || ''
-      if (/Throttling|TooManyRequests|ServiceUnavailable/i.test(name) && attempt < 3) {
-        usage.throttled++
-        await new Promise((r) => setTimeout(r, Math.random() * (500 * 2 ** attempt)))
-        continue
-      }
-      throw err
+      const retryable = RETRYABLE.test(name) || err?.$metadata?.httpStatusCode >= 500
+      if (!retryable || attempt === ATTEMPTS - 1) break
+      usage.throttled++
+      const wait = backoff(attempt)
+      const next = chain[Math.min(Math.floor((attempt + 1) / 2), chain.length - 1)]
+      console.error(`      bedrock ${name} on ${req.modelId} — retrying in ${(wait / 1000).toFixed(1)}s${next !== req.modelId ? ` as ${next}` : ''}`)
+      await sleep(wait)
     }
   }
-  throw new Error(`converse: ${model} returned nothing after 4 attempts`)
+  const tried = [...new Set(chain.slice(0, Math.min(Math.ceil(ATTEMPTS / 2), chain.length)))].join(', ')
+  throw new Error(
+    `Bedrock could not serve ${model} after ${ATTEMPTS} attempts across ${tried}: ${last?.name || 'unknown'}. ` +
+    'A 503 here is regional capacity, not a bad request — re-run, or set PAG_MODEL_FAST / PAG_MODEL_HEAVY ' +
+    'to a profile with room (global.<id> is usually the answer).'
+  )
 }
 
 /** Converse + strict JSON parse. Retries ONCE unconstrained, then gives up honestly. */
