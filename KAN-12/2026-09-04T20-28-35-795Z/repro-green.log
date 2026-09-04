@@ -1,0 +1,8 @@
+
+Running 1 test using 1 worker
+
+MOBILE {"padLeft":24,"padRight":24,"padTop":32,"padBottom":32,"contentWidth":272,"mobileLines":2,"scrollWidth":320,"clientWidth":320}
+DESKTOP {"padLeft":64,"padRight":64,"padTop":128,"padBottom":128,"contentWidth":640,"desktopLines":2}
+  ✓  1 [chromium] › ../runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:34:1 › KAN-12 home page main padding adapts to a 320px viewport (1.3s)
+
+  1 passed (2.0s)

@@ -1,0 +1,138 @@
+
+Running 1 test using 1 worker
+
+MOBILE {"padLeft":64,"padRight":64,"padTop":128,"padBottom":128,"contentWidth":192,"mobileLines":4,"scrollWidth":320,"clientWidth":320}
+DESKTOP {"padLeft":64,"padRight":64,"padTop":128,"padBottom":128,"contentWidth":640,"desktopLines":2}
+  ✘  1 [chromium] › ../runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:34:1 › KAN-12 home page main padding adapts to a 320px viewport (1.3s)
+
+
+  1) [chromium] › ../runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:34:1 › KAN-12 home page main padding adapts to a 320px viewport 
+
+    Error: main padding-left at 320px
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 24
+    Received:    64
+
+      49 |   // AC1 + AC2: horizontal padding at most 24px a side, leaving a content column of 270px or more.
+      50 |   await check(page, '01-mobile-320-horizontal-padding', async () => {
+    > 51 |     expect.soft(mobile.padLeft, 'main padding-left at 320px').toBeLessThanOrEqual(24)
+         |                                                               ^
+      52 |     expect.soft(mobile.padRight, 'main padding-right at 320px').toBeLessThanOrEqual(24)
+      53 |     expect.soft(mobile.contentWidth, 'main content column width at 320px').toBeGreaterThanOrEqual(270)
+      54 |   })
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:51:63)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:50:9
+
+    Error: main padding-right at 320px
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 24
+    Received:    64
+
+      50 |   await check(page, '01-mobile-320-horizontal-padding', async () => {
+      51 |     expect.soft(mobile.padLeft, 'main padding-left at 320px').toBeLessThanOrEqual(24)
+    > 52 |     expect.soft(mobile.padRight, 'main padding-right at 320px').toBeLessThanOrEqual(24)
+         |                                                                 ^
+      53 |     expect.soft(mobile.contentWidth, 'main content column width at 320px').toBeGreaterThanOrEqual(270)
+      54 |   })
+      55 |
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:52:65)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:50:9
+
+    Error: main content column width at 320px
+
+    expect(received).toBeGreaterThanOrEqual(expected)
+
+    Expected: >= 270
+    Received:    192
+
+      51 |     expect.soft(mobile.padLeft, 'main padding-left at 320px').toBeLessThanOrEqual(24)
+      52 |     expect.soft(mobile.padRight, 'main padding-right at 320px').toBeLessThanOrEqual(24)
+    > 53 |     expect.soft(mobile.contentWidth, 'main content column width at 320px').toBeGreaterThanOrEqual(270)
+         |                                                                            ^
+      54 |   })
+      55 |
+      56 |   // AC4: vertical padding at most 64px top and bottom.
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:53:76)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:50:9
+
+    Error: main padding-top at 320px
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 64
+    Received:    128
+
+      56 |   // AC4: vertical padding at most 64px top and bottom.
+      57 |   await check(page, '02-mobile-320-vertical-padding', async () => {
+    > 58 |     expect.soft(mobile.padTop, 'main padding-top at 320px').toBeLessThanOrEqual(64)
+         |                                                             ^
+      59 |     expect.soft(mobile.padBottom, 'main padding-bottom at 320px').toBeLessThanOrEqual(64)
+      60 |   })
+      61 |
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:58:61)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:57:9
+
+    Error: main padding-bottom at 320px
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 64
+    Received:    128
+
+      57 |   await check(page, '02-mobile-320-vertical-padding', async () => {
+      58 |     expect.soft(mobile.padTop, 'main padding-top at 320px').toBeLessThanOrEqual(64)
+    > 59 |     expect.soft(mobile.padBottom, 'main padding-bottom at 320px').toBeLessThanOrEqual(64)
+         |                                                                   ^
+      60 |   })
+      61 |
+      62 |   // AC3: the headline fits on two lines or fewer.
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:59:67)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:57:9
+
+    Error: headline line count at 320px
+
+    expect(received).toBeLessThanOrEqual(expected)
+
+    Expected: <= 2
+    Received:    4
+
+      62 |   // AC3: the headline fits on two lines or fewer.
+      63 |   await check(page, '03-mobile-320-headline-wrap', async () => {
+    > 64 |     expect.soft(mobileLines, 'headline line count at 320px').toBeLessThanOrEqual(2)
+         |                                                              ^
+      65 |   })
+      66 |
+      67 |   // AC8: nothing spills sideways — no horizontal scrolling at 320px.
+        at assertions (/home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:64:62)
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:11)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:63:9
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/pw-before/KAN-12-KAN-12-home-page-ma-8c3e0--adapts-to-a-320px-viewport-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    ../runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/pw-before/KAN-12-KAN-12-home-page-ma-8c3e0--adapts-to-a-320px-viewport-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/pw-before/KAN-12-KAN-12-home-page-ma-8c3e0--adapts-to-a-320px-viewport-chromium/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/pw-before/KAN-12-KAN-12-home-page-ma-8c3e0--adapts-to-a-320px-viewport-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace ../runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/pw-before/KAN-12-KAN-12-home-page-ma-8c3e0--adapts-to-a-320px-viewport-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › ../runs/KAN-12/2026-09-04T20-28-35-795Z/evidence/witness/KAN-12.spec.mjs:34:1 › KAN-12 home page main padding adapts to a 320px viewport 
