@@ -49,18 +49,59 @@ export function jiraConfig() {
   }
 }
 
-async function api(pathname, { method = 'GET', body } = {}) {
-  const { url, auth } = jiraConfig()
-  const res = await fetch(`${url}${pathname}`, {
-    method,
-    headers: { Authorization: auth, Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  })
-  if (res.status === 204) return {}
-  const text = await res.text()
-  if (!res.ok) throw new Error(`Jira ${method} ${pathname} -> ${res.status}: ${text.slice(0, 400)}`)
-  return text ? JSON.parse(text) : {}
+/**
+ * TWO BASE URLS, and which one works depends on the kind of token.
+ *
+ * A classic API token authenticates against the site itself (https://<site>.atlassian.net/rest/...).
+ * A SCOPED token does not: the site URL answers it with a bare 401 and it only works through
+ * https://api.atlassian.com/ex/jira/<cloudId>/rest/... . The cloud id is public at
+ * {site}/_edge/tenant_info, so it can be resolved at runtime instead of being configured.
+ *
+ * This is why the first CI run reported "token rejected" for a token that works everywhere else —
+ * it is scoped, and only the gateway would have accepted it. (This repo's comment_jira.py already
+ * knew; the Node side did not.) The winning base is cached for the process.
+ */
+let RESOLVED_BASE = null
+
+async function cloudId(url) {
+  try {
+    const r = await fetch(`${url}/_edge/tenant_info`, { signal: AbortSignal.timeout(10_000) })
+    if (!r.ok) return null
+    return (await r.json())?.cloudId || null
+  } catch { return null }
 }
+
+async function bases() {
+  const { url } = jiraConfig()
+  if (RESOLVED_BASE) return [RESOLVED_BASE]
+  const list = [url]
+  const id = await cloudId(url)
+  if (id) list.push(`https://api.atlassian.com/ex/jira/${id}`)
+  return list
+}
+
+async function api(pathname, { method = 'GET', body } = {}) {
+  const { auth } = jiraConfig()
+  const candidates = await bases()
+  let last = null
+  for (const base of candidates) {
+    const res = await fetch(`${base}${pathname}`, {
+      method,
+      headers: { Authorization: auth, Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    if (res.status === 204) { RESOLVED_BASE = base; return {} }
+    const text = await res.text()
+    if (res.ok) { RESOLVED_BASE = base; return text ? JSON.parse(text) : {} }
+    last = { status: res.status, text, base }
+    // 401/403/404 on the site URL is exactly what a scoped token looks like — try the gateway.
+    if (![401, 403, 404].includes(res.status)) break
+  }
+  throw new Error(`Jira ${method} ${pathname} -> ${last.status} (base ${last.base}): ${last.text.slice(0, 400)}`)
+}
+
+/** Which base ended up working — for diagnostics only. */
+export const resolvedBase = () => RESOLVED_BASE
 
 /**
  * Raw status probe. Jira Cloud answers an issue the caller may not READ with **404, not 401** — so
@@ -69,33 +110,47 @@ async function api(pathname, { method = 'GET', body } = {}) {
  * 404 on an issue means a permission or key problem, not an auth problem.
  */
 export async function probeIssue(key) {
-  const { url, auth } = jiraConfig()
-  const get = async (p) => {
-    const r = await fetch(`${url}${p}`, { headers: { Authorization: auth, Accept: 'application/json' } })
-    return { status: r.status, body: (await r.text()).slice(0, 300) }
+  const { host, email, dirty, auth } = jiraConfig()
+  const candidates = await bases()
+  const get = async (base, p) => {
+    try {
+      const r = await fetch(`${base}${p}`, { headers: { Authorization: auth, Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) })
+      return { status: r.status, body: (await r.text()).slice(0, 300) }
+    } catch (e) { return { status: 0, body: String(e.message) } }
   }
-  const { host, email, dirty } = jiraConfig()
-  const me = await get('/rest/api/3/myself')
-  const issue = await get(`/rest/api/3/issue/${encodeURIComponent(key)}`)
-  const where = `site ${host} as ${email}`
+
+  // READING THE ISSUE is the only thing that matters. /myself needs the read:jira-user scope, which
+  // a write-scoped token does not have, so a 401 there says nothing about whether the agent can
+  // work — treating it as fatal is what refused a perfectly good token on the first CI run.
+  let me = { status: 0 }, issue = { status: 0 }, usedBase = candidates[0], kind = ''
+  for (const base of candidates) {
+    usedBase = base
+    kind = base.includes('api.atlassian.com') ? 'scoped token via api.atlassian.com' : 'classic token via the site URL'
+    me = await get(base, '/rest/api/3/myself')
+    issue = await get(base, `/rest/api/3/issue/${encodeURIComponent(key)}`)
+    if (issue.status === 200) break
+  }
+
+  const where = `${host} as ${email} (${kind})`
   let verdict
-  if (me.status === 401) {
+  if (issue.status === 200) {
+    verdict = me.status === 200 ? `readable — ${kind}` : `readable — ${kind}; /myself is 401 because the token lacks read:jira-user, which is fine`
+  } else if (issue.status === 401 || me.status === 401) {
     verdict = [
-      `Jira rejected the credentials (401 on /myself) — ${where}.`,
-      'Check, in this order:',
-      `  1. the SITE: does ${host} own ${key}? A key from another Jira site cannot be read here.`,
-      '  2. the EMAIL: it must be the Atlassian account the API token was created under.',
-      '  3. the TOKEN: create a fresh one at id.atlassian.com/manage-profile/security/api-tokens',
-      '     and paste it with NO quotes, NO spaces and NO trailing newline.',
-      dirty.length ? `     (note: ${dirty.join(', ')} had quotes/whitespace, which was stripped before this call)` : '',
+      `Jira rejected the credentials on both the site URL and the api.atlassian.com gateway — ${where}.`,
+      'In order of likelihood:',
+      '  1. the TOKEN expired or was revoked — make a new one at',
+      '     id.atlassian.com/manage-profile/security/api-tokens',
+      `  2. the EMAIL is not the Atlassian account that owns the token (currently ${email})`,
+      `  3. the SITE does not own ${key} — check the URL you use in the browser`,
+      dirty.length ? `  (${dirty.join(', ')} had quotes or whitespace; that was stripped before this call)` : '',
     ].filter(Boolean).join('\n')
-  } else if (me.status !== 200) verdict = `cannot identify the token holder (myself -> ${me.status}) on ${where}`
-  else if (issue.status === 200) verdict = 'readable'
-  else if (issue.status === 404) {
-    verdict = `the token works on ${where}, but ${key} is not readable by it — either that key does not exist on this site, ` +
+  } else if (issue.status === 404) {
+    verdict = `the credentials work on ${where}, but ${key} is not readable — either that key does not exist on this site, ` +
       'or this user lacks Browse Projects on its project (Jira answers 404, not 403, for both).'
-  } else verdict = `issue -> ${issue.status} on ${where}`
-  return { me: me.status, issue: issue.status, verdict, body: issue.body }
+  } else if (issue.status === 0) verdict = `could not reach Jira: ${issue.body}`
+  else verdict = `issue -> ${issue.status} on ${where}`
+  return { me: me.status, issue: issue.status, base: usedBase, kind, verdict, body: issue.body }
 }
 
 /** One issue, redacted, comments included. Returns null when unreadable rather than throwing. */

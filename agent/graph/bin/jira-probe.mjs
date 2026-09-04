@@ -19,7 +19,7 @@ for (const k of keys) {
   const p = await probeIssue(k).catch((e) => ({ me: '-', issue: '-', verdict: e.message }))
   const okRead = p.issue === 200
   if (!okRead) bad++
-  console.log(`  ${okRead ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m'} ${k.padEnd(12)} myself=${String(p.me).padEnd(4)} issue=${String(p.issue).padEnd(4)}`)
+  console.log(`  ${okRead ? '\x1b[32m✓\x1b[0m' : '\x1b[31m✗\x1b[0m'} ${k.padEnd(12)} myself=${String(p.me).padEnd(4)} issue=${String(p.issue).padEnd(4)} ${p.kind || ''}`)
   if (!okRead) console.log(String(p.verdict).split('\n').map((l) => `      ${l}`).join('\n'))
 }
 console.log('')
