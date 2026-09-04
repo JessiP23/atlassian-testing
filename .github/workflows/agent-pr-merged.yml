@@ -1,0 +1,101 @@
+name: Agent — close the ticket when the PR merges
+
+# The other half of the loop. `agent-ticket-to-pr.yml` opens the PR and moves the ticket to review;
+# this moves it to Done when a human merges that PR, and says so on the ticket.
+#
+# Why it is a separate workflow: the agent's run is long dead by the time anyone merges — often
+# days later — so nothing in that job can watch for it. `pull_request: closed` is the only event
+# that fires at the right moment, and it costs nothing when the PR is not the agent's.
+#
+# The agent still cannot merge anything. This only reacts to a merge a person performed.
+
+on:
+  pull_request:
+    types: [closed]
+  # For a PR that was merged before this workflow existed, or one whose branch was named by hand.
+  workflow_dispatch:
+    inputs:
+      issue_key:
+        description: Jira issue key to move to Done
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-merged-${{ github.event.pull_request.number || inputs.issue_key }}
+  cancel-in-progress: false
+
+jobs:
+  close:
+    # Only merged PRs, never a PR someone closed without merging — that ticket is not done, and
+    # moving it to Done would be worse than doing nothing.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      JIRA_URL: ${{ secrets.JIRA_BASE_URL || vars.JIRA_BASE_URL }}
+      JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+      PAG_ENV_PRECEDENCE: env
+      BRANCH: ${{ github.event.pull_request.head.ref }}
+      PR_TITLE: ${{ github.event.pull_request.title }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
+      INPUT_KEY: ${{ inputs.issue_key }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: agent
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: agent/graph/package-lock.json
+
+      # Only the Jira client is needed here, not the graph.
+      - run: npm --prefix agent/graph ci --no-audit --no-fund --prefer-offline --omit=dev || npm --prefix agent/graph install --no-audit --no-fund
+
+      # The issue key comes from the branch the agent created (`agent/KAN-11-fix`), and falls back
+      # to the PR title, which carries it too. A PR from a human branch that names no ticket simply
+      # exits 0 — this workflow runs on every merge and must be silent for the ones it does not own.
+      - name: Find the ticket
+        id: key
+        run: |
+          KEY="$INPUT_KEY"
+          if [ -z "$KEY" ]; then
+            KEY=$(printf '%s' "$BRANCH"    | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1 || true)
+          fi
+          if [ -z "$KEY" ]; then
+            KEY=$(printf '%s' "$PR_TITLE"  | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1 || true)
+          fi
+          if [ -z "$KEY" ]; then
+            echo "no Jira key in branch \"$BRANCH\" or title — not an agent PR, nothing to do"
+            echo "found=" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "found=$KEY" >> "$GITHUB_OUTPUT"
+          echo "ticket: $KEY"
+
+      - name: Move it to Done and say why
+        if: steps.key.outputs.found != ''
+        env:
+          KEY: ${{ steps.key.outputs.found }}
+        run: |
+          cd agent/graph
+          node bin/jira-transition.mjs "$KEY" \
+            --to "${{ vars.PAG_JIRA_DONE || 'Done,Closed,Resolved,Complete,Completed' }}" \
+            --comment "Merged by @${MERGED_BY:-a reviewer}: ${PR_URL}
+
+          Branch ${BRANCH} is on ${{ github.event.pull_request.base.ref || 'the base branch' }}. Moving this ticket to Done."
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ steps.key.outputs.found || 'no ticket' }}"
+            echo "PR: $PR_URL"
+            echo "Branch: \`$BRANCH\`"
+          } >> "$GITHUB_STEP_SUMMARY"

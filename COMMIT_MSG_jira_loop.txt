@@ -1,0 +1,38 @@
+feat(jira): close the loop — move the ticket on PR open, and on merge
+
+The ticket sat in To Do after a successful run and had to be dragged by hand, which is most of the
+manual work the automation exists to remove. Two halves were missing.
+
+MOVING IT WHEN THE PR OPENS.  `transition()` existed and was correct, but it was opt-in behind
+PAG_JIRA_TRANSITION and that variable was never set, so it never ran. It is on by default now, and
+it takes a CANDIDATE LIST rather than one name: "In Review" is called In Review / Code Review /
+Peer Review / In QA on four different boards, and Jira only offers the transitions valid from the
+ticket's CURRENT status, so a single hard-coded name fails the moment a board is renamed or a
+ticket is not where you expected. lib/jira.mjs now matches on the transition name OR the status it
+lands in (boards commonly call the transition "Start review" and the column "In Review"), and when
+nothing matches it logs every transition that WAS on offer — the only useful output at that point.
+A hand-over moves to In Progress instead of In Review, because an INCOMPLETE draft is not ready for
+anyone to review.
+
+MOVING IT WHEN THE PR MERGES.  Nothing watched for that at all. The agent's run is long dead by the
+time a human merges — often days later — so no step inside it can observe the merge; only a
+`pull_request: closed` event fires at the right moment. New workflow agent-pr-merged.yml reads the
+issue key from the branch the agent created (falling back to the PR title), comments the merge on
+the ticket, and moves it to Done. It ignores PRs that were closed without merging, because that
+ticket is not done and moving it would be worse than doing nothing, and it exits silently on any PR
+that names no ticket, since it runs on every merge in the repo.
+
+bin/jira-transition.mjs is the shared CLI and is also the discovery tool: run it with just a key and
+it prints the ticket's status and every transition available from it, which is how you find a board's
+real column names before setting PAG_JIRA_TRANSITION / PAG_JIRA_DONE. It exits 0 even when it does
+not move anything — a ticket a human already dragged to Done has nothing to do here, and failing
+the job over that would turn every such merge into a red build.
+
+The agent still cannot merge. This only reacts to a merge a person performed.
+
+NOTE for whoever wires this to a company board: the agent now transitions the ticket itself, so a
+Jira Automation rule that triggers on "issue transitioned" without naming a status will fire again
+on the agent's own move and start a second run. Scope the trigger to the one status.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

@@ -458,10 +458,30 @@ export function publishNode({ budget, dryRun = false }) {
       ].filter(Boolean)
       await addComment(s.issueKey, lines.join('\n')).catch((e) => console.error(`jira comment failed: ${e.message}`))
 
-      // Moving the ticket is opt-in: on a team board the transition names differ per project and a
-      // wrong one is noisy. Set PAG_JIRA_TRANSITION="In Review" once you know yours.
-      const wanted = process.env.PAG_JIRA_TRANSITION
-      if (wanted && !inc) await transition(s.issueKey, wanted).catch((e) => console.error(`jira transition failed: ${e.message}`))
+      // Move the ticket. This used to be opt-in behind PAG_JIRA_TRANSITION and therefore never
+      // happened: a PR would open and the ticket would sit in To Do until someone dragged it,
+      // which is most of the manual work the automation was supposed to remove.
+      //
+      // It is on by default now, with a CANDIDATE LIST rather than one name, because "In Review" is
+      // called four different things across boards and Jira only offers the transitions valid from
+      // the ticket's current status. lib/jira.mjs matches the transition name or the destination
+      // column, and logs everything that was on offer when nothing matches — which is the only
+      // useful output when a board is named unusually.
+      //
+      // PAG_JIRA_TRANSITION overrides the list; PAG_JIRA_TRANSITION=off disables it.
+      const configured = (process.env.PAG_JIRA_TRANSITION || '').trim()
+      if (configured.toLowerCase() !== 'off') {
+        const wanted = configured
+          ? configured.split(',').map((x) => x.trim()).filter(Boolean)
+          : (inc
+            // A hand-over is not ready for review. Say it is being worked on, not that it is done.
+            ? ['In Progress', 'In Development', 'Doing']
+            : ['In Review', 'Code Review', 'Peer Review', 'Review', 'In QA', 'Ready for QA', 'In Progress'])
+        const t = await transition(s.issueKey, wanted).catch((e) => ({ moved: false, reason: e.message, available: [] }))
+        console.error(t.moved
+          ? `jira: ${s.issueKey} moved to "${t.to}" (via "${t.via}")`
+          : `jira: ${s.issueKey} not moved — ${t.reason}. Available from its current status: ${(t.available || []).join(' | ') || 'none'}`)
+      }
     }
 
     return { pr, prUrl, branchName: branch }

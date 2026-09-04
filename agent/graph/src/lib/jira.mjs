@@ -189,18 +189,49 @@ export async function addComment(key, markdown) {
   })
 }
 
+/** Every transition the ticket can make RIGHT NOW, from its current status. */
+export async function listTransitions(key) {
+  const { transitions = [] } = await api(`/rest/api/3/issue/${encodeURIComponent(key)}/transitions`)
+  return transitions.map((t) => ({ id: t.id, name: t.name, to: t.to?.name }))
+}
+
+/** The status the ticket is in now. */
+export async function currentStatus(key) {
+  const r = await api(`/rest/api/3/issue/${encodeURIComponent(key)}?fields=status`)
+  return r?.fields?.status?.name || null
+}
+
 /**
- * Move the ticket by TRANSITION NAME, tolerantly. Board workflows rename these constantly, so an
- * exact-match-or-fail transition is a run that dies on a board config change. Falls back to the
- * closest available name and reports what it actually did.
+ * Move the ticket, tolerantly, trying several names in order.
+ *
+ * Two things make an exact-match transition useless in practice. Board workflows rename columns
+ * constantly ("In Review" / "Code Review" / "Peer Review" / "In QA" are the same column on four
+ * different boards), and Jira only offers the transitions valid FROM THE CURRENT STATUS — so a
+ * ticket sitting in To Do may have no path to Done at all without passing through In Progress.
+ *
+ * So `wanted` is a list of candidates in preference order, and this returns what it actually did
+ * plus everything that was on offer, which is what you need in the log when it does nothing.
+ *
+ * @param {string} key
+ * @param {string|string[]} wanted  candidate transition names, best first
  */
 export async function transition(key, wanted) {
-  const { transitions = [] } = await api(`/rest/api/3/issue/${encodeURIComponent(key)}/transitions`)
-  const norm = (x) => x.toLowerCase().replace(/[^a-z]/g, '')
-  const target = norm(wanted)
-  const exact = transitions.find((t) => norm(t.name) === target)
-  const fuzzy = exact || transitions.find((t) => norm(t.name).includes(target) || target.includes(norm(t.name)))
-  if (!fuzzy) return { moved: false, available: transitions.map((t) => t.name) }
-  await api(`/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, { method: 'POST', body: { transition: { id: fuzzy.id } } })
-  return { moved: true, to: fuzzy.name, exact: Boolean(exact) }
+  const candidates = (Array.isArray(wanted) ? wanted : [wanted]).filter(Boolean)
+  const transitions = await listTransitions(key)
+  if (!transitions.length) return { moved: false, reason: 'no transitions are available from the current status', available: [] }
+
+  const norm = (x) => String(x).toLowerCase().replace(/[^a-z]/g, '')
+  for (const want of candidates) {
+    const target = norm(want)
+    // Match the transition's own name OR the status it lands in — boards commonly name the
+    // transition "Start review" and the destination column "In Review", and the ticket says the
+    // destination.
+    const hit = transitions.find((t) => norm(t.name) === target || norm(t.to) === target)
+      || transitions.find((t) => norm(t.name).includes(target) || norm(t.to || '').includes(target))
+      || transitions.find((t) => target.includes(norm(t.name)))
+    if (!hit) continue
+    await api(`/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, { method: 'POST', body: { transition: { id: hit.id } } })
+    return { moved: true, to: hit.to || hit.name, via: hit.name, matched: want, available: transitions.map((t) => t.name) }
+  }
+  return { moved: false, reason: `none of ${candidates.join(' / ')} matched`, available: transitions.map((t) => `${t.name} -> ${t.to}`) }
 }
