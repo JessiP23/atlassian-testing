@@ -1,0 +1,27 @@
+feat(publish): push mode — ship the branch without a GitHub API token
+
+Pushing a branch and opening a PR are two different permissions, and on a company repo you usually
+have the first long before the second. `git push` goes over SSH and uses your SSH key; opening a PR
+is a REST call and GitHub's API does not accept SSH keys at all. So a run against
+AssetPandaLLC/pioneer did every expensive thing correctly and then died one API call short of a
+deliverable, because a personal fine-grained PAT is locked to the account that owns it and can
+never see an org repo — GitHub answers 404, not 403, which reads like a wrong repo name.
+
+Push mode pushes the branch (SSH, already permitted) and returns GitHub's own compare URL with the
+title prefilled, so opening the PR is one human click. The branch, the evidence and the Jira comment
+are all in place either way; the only thing missing is the click. It is chosen automatically when
+there is no usable token, forced with PAG_PR_MODE=push|api, and — the case that actually bit —
+`gh pr create` failing now falls back to it instead of throwing away a pushed branch and a written
+PR body.
+
+The body is several KB with image links, too long for a URL, so it is written to the run folder and
+the operator pastes it (`pbcopy < .../pr-body.md`). Labels are skipped in push mode, since they are
+an API action and get applied when the PR is opened.
+
+doctor stops treating a missing or org-blind token as fatal: it reports which mode the run will use,
+and it now checks `git ls-remote` separately, because push mode depends on the git path and not on
+the API. A 404 on the repo is reported as what it almost always is — a token scoped to the wrong
+owner — rather than as a possibly-wrong repo name.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T
