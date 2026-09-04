@@ -166,7 +166,8 @@ try {
   const plan = profile.gate(repo, { owners: ['app'], typeConsumers: [] })
   ok(`profile: ${profile.name}`, `gate: ${plan.map((c) => c.target + (c.exclusive ? ' (alone)' : '')).join(', ') || 'nothing — no lint/test/build scripts found'}`)
   if (!plan.length) warn('the gate has no commands', 'nothing will verify the patch beyond the reproducing test')
-  if (!profile.testOne(repo, 'x.test.ts')) warn('no unit test runner in this repo', 'the browser witness is the only evidence rung; the plan will not ask for unit tests')
+  if (profile.hasUnitRunner(repo)) ok('unit test runner available', 'the reproducing test can be a real unit test — the cheapest and most reliable evidence rung')
+  else warn('no unit test runner in this repo', 'the browser witness is the only evidence rung; the plan will not ask for unit tests')
 } catch (e) { bad('profile', e.message) }
 
 for (const [cmd, args, label, fix] of [

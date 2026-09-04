@@ -44,8 +44,11 @@ for (let i = 0; i < argv.length; i++) {
   if (!KNOWN.has(name)) { console.error(`unknown flag --${name}\nknown: ${[...KNOWN].map((k) => `--${k}`).join(' ')}`); process.exit(1) }
 }
 
-const issueKey = argv[0]
-if (!issueKey || issueKey.startsWith('--')) { console.error('usage: ci.mjs <ISSUE-KEY> [--repo .] [--base main] [--target main] [--dry-run]'); process.exit(1) }
+// The key can sit anywhere in the arguments, not only first. `npm run dry -- ESI2-3393` expands to
+// `node bin/ci.mjs --repo … --dry-run ESI2-3393`, and requiring position 0 made every npm script
+// wrapper impossible for no reason.
+const issueKey = argv.find((a) => /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(a))
+if (!issueKey) { console.error('usage: ci.mjs <ISSUE-KEY> [--repo .] [--base main] [--target main] [--dry-run]'); process.exit(1) }
 
 const repo = path.resolve(String(flag('repo', process.env.GITHUB_WORKSPACE || process.cwd())))
 const baseBranch = String(flag('base', process.env.PAG_BASE_BRANCH || 'main'))

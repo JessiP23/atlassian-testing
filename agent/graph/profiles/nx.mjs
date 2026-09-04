@@ -66,6 +66,9 @@ export default {
     ].filter((s) => s.projects.length)
   },
 
+  // nx always has a test target; whether a GIVEN file has an owning project is testOne's question.
+  hasUnitRunner: () => true,
+
   testOne(repo, specFile) {
     const project = this.ownerOf(repo, specFile)
     if (!project) return null

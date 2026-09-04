@@ -1,27 +1,40 @@
-feat(publish): push mode — ship the branch without a GitHub API token
+feat(publish): push mode, so a run ships without a GitHub API token
 
-Pushing a branch and opening a PR are two different permissions, and on a company repo you usually
-have the first long before the second. `git push` goes over SSH and uses your SSH key; opening a PR
-is a REST call and GitHub's API does not accept SSH keys at all. So a run against
-AssetPandaLLC/pioneer did every expensive thing correctly and then died one API call short of a
-deliverable, because a personal fine-grained PAT is locked to the account that owns it and can
-never see an org repo — GitHub answers 404, not 403, which reads like a wrong repo name.
+Pushing a branch and opening a PR are two different permissions, and on a company repo you have the
+first long before the second. `git push` goes over SSH and uses your SSH key; opening a PR is a REST
+call and GitHub's API does not accept SSH keys at all. So a run against AssetPandaLLC/pioneer did
+every expensive thing correctly and then died one API call short of a deliverable — a personal
+fine-grained PAT is locked to the account that owns it and can never see an org repo, and GitHub
+answers 404 for that, which reads like a wrong repo name.
 
-Push mode pushes the branch (SSH, already permitted) and returns GitHub's own compare URL with the
-title prefilled, so opening the PR is one human click. The branch, the evidence and the Jira comment
-are all in place either way; the only thing missing is the click. It is chosen automatically when
-there is no usable token, forced with PAG_PR_MODE=push|api, and — the case that actually bit —
-`gh pr create` failing now falls back to it instead of throwing away a pushed branch and a written
-PR body.
+Push mode pushes the branch over SSH and returns GitHub's own compare URL with the title prefilled,
+so opening the PR is one human click. The branch, the evidence and the Jira comment are all in place
+either way. It is chosen automatically when there is no usable token, forced with
+PAG_PR_MODE=push|api, and — the case that actually bit — `gh pr create` failing now falls back to it
+instead of discarding a pushed branch and a written PR body. The body is several KB with image
+links, too long for a URL, so it goes to the run folder to be pasted.
 
-The body is several KB with image links, too long for a URL, so it is written to the run folder and
-the operator pastes it (`pbcopy < .../pr-body.md`). Labels are skipped in push mode, since they are
-an API action and get applied when the PR is opened.
+Also:
 
-doctor stops treating a missing or org-blind token as fatal: it reports which mode the run will use,
-and it now checks `git ls-remote` separately, because push mode depends on the git path and not on
-the API. A 404 on the repo is reported as what it almost always is — a token scoped to the wrong
-owner — rather than as a possibly-wrong repo name.
+  ci.mjs        finds the issue key anywhere in the arguments instead of only at position 0.
+                `npm run dry -- ESI2-3393` expands to `... --repo X --dry-run ESI2-3393`, and the
+                positional requirement made every wrapper script impossible for no reason.
+
+  package.json  npm run wt / doctor / dry / live / jira. The two paths that change per machine
+                (the product checkout and the worktree) are read from PAG_PRODUCT and PAG_WORKTREE
+                with sane defaults, so the daily loop is two short commands instead of two long ones.
+
+  doctor        stops treating a missing or org-blind token as fatal — it reports which PR mode the
+                run will use — and checks `git ls-remote` separately, because push mode depends on
+                the git path and not on the API.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T
+
+Also fixes a bug this commit's own doctor exposed on pioneer: "does this repo have a unit test
+runner" was answered by calling `profile.testOne(repo, 'x.test.ts')`. On nx, testOne resolves the
+owning project FROM THE PATH, so a path that does not exist has no owner and testOne correctly
+returns null — which read as "pioneer has no test runner". Pioneer has jest, and plan.mjs used the
+same probe to DROP newTests, so the plan would have silently discarded the unit rung on the one
+repo where it is the right rung. It is a repo capability now (`profile.hasUnitRunner`), declared
+per profile, and testOne goes back to answering only "how do I run THIS file".

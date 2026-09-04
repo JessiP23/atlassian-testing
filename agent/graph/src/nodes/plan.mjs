@@ -114,7 +114,7 @@ export function planNode({ budget, onProgress = () => {} }) {
     // The witness (a Playwright spec against the running app) is this repo's evidence rung and it
     // has already run by the time patch starts. Asking for unit tests on top is asking for a test
     // harness, which is its own ticket.
-    if (!loadProfile(s.repo).testOne(s.repo, 'x.test.ts') && data.newTests?.length) {
+    if (!loadProfile(s.repo).hasUnitRunner(s.repo) && data.newTests?.length) {
       onProgress(`plan asked for ${data.newTests.length} unit test(s) but this repo has no test runner — dropping them; the browser witness is the evidence rung here`)
       data.newTests = []
     }

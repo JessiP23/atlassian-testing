@@ -13,7 +13,12 @@
     "serve": "node bin/serve.mjs",
     "witness:install": "npx playwright install chromium",
     "test": "node --test test/*.test.mjs",
-    "test:watch": "node --test --watch test/*.test.mjs"
+    "test:watch": "node --test --watch test/*.test.mjs",
+    "wt": "node bin/prepare-worktree.mjs --repo ${PAG_WORKTREE:-$HOME/pioneer-agent} --from ${PAG_PRODUCT:-$HOME/pioneer} --base ${PAG_BASE:-main}",
+    "doctor": "node bin/doctor.mjs --repo ${PAG_PRODUCT:-$HOME/pioneer}",
+    "dry": "node bin/ci.mjs --repo ${PAG_WORKTREE:-$HOME/pioneer-agent} --base ${PAG_BASE:-main} --dry-run",
+    "live": "node bin/ci.mjs --repo ${PAG_WORKTREE:-$HOME/pioneer-agent} --base ${PAG_BASE:-main}",
+    "jira": "node bin/jira-transition.mjs"
   },
   "engines": {
     "node": ">=20"

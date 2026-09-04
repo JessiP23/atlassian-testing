@@ -30,6 +30,9 @@ export function detectProfile(repo) {
 // never breaks an existing profile.
 const DEFAULTS = {
   e2eDir: () => null,
+  // Fail toward KEEPING the unit rung: a profile that forgets to declare this should not silently
+  // lose the cheapest evidence a repo can produce.
+  hasUnitRunner: () => true,
 }
 
 export function loadProfile(repo) {

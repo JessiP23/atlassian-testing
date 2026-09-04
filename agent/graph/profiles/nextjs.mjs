@@ -57,6 +57,8 @@ export default {
 
   // No jest/vitest in a starter app: the unit rung is unavailable, and reproduce goes to the
   // witness for UI files. Wire this up the moment the repo gains a test runner.
+  hasUnitRunner: (repo) => hasDep(repo, 'jest') || hasDep(repo, 'vitest'),
+
   testOne(repo, specFile) {
     if (hasDep(repo, 'jest')) return { project: 'app', argv: ['jest', '--runTestsByPath', specFile], display: `npx jest --runTestsByPath ${specFile}` }
     if (hasDep(repo, 'vitest')) return { project: 'app', argv: ['vitest', 'run', specFile], display: `npx vitest run ${specFile}` }
