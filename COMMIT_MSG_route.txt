@@ -1,0 +1,16 @@
+ci: one workflow owns the Jira dispatch, plus an optional cheap model tier
+
+GitHub fires EVERY workflow that listens to a repository_dispatch type, and
+three of ours listened to jira-ready-for-dev — so one ticket started three
+pipelines and the oldest one was the one people noticed. The dispatch now
+belongs to agent-ticket-to-pr.yml alone; jira-to-pr.yml and
+jira-to-pr-pioneer.yml stay as manual (workflow_dispatch) runs.
+
+Also: TIERS.cheap (default us.openai.gpt-5.6-luna, $0.44/$1.98 per million
+against Haiku's $1/$5). It has no tool use, so it can only hold the bounded
+JSON nodes — PAG_CHEAP_NODES=intake,rerank,plan,package opts in, and naming a
+node that needs tools (patch, repair, repro) fails at startup instead of
+mid-run.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

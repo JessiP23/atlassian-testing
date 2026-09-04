@@ -3,9 +3,10 @@ name: Jira to PR
 # Jira Global Automation -> GitHub repository_dispatch -> Bedrock agents -> review-only PR.
 # This workflow never merges.
 
+# LEGACY. The Jira dispatch is owned by agent-ticket-to-pr.yml — GitHub fires EVERY workflow that
+# listens to the same repository_dispatch type, so having it here too ran both pipelines on one
+# ticket. Kept for manual comparison runs only.
 on:
-  repository_dispatch:
-    types: [jira-ready-for-dev]
   workflow_dispatch:
     inputs:
       issue_key:

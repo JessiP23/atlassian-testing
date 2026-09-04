@@ -22,6 +22,11 @@
 // Opus is reserved for the two jobs where being wrong is expensive and the input is unbounded:
 // writing the patch, and repairing a failing patch from test output.
 
+// Three tiers, and one hard rule that decides which jobs a tier can hold: a tier without TOOL USE
+// can only do "read this, emit JSON". It cannot run `claude -p`, cannot iterate a test against a
+// runner, cannot drive a browser. GPT-5.6 Luna is exactly that case — $0.44/$1.98 per million
+// against Haiku's $1/$5, Converse API supported, no tool use — so it is a candidate for
+// intake/rerank/plan/package and for nothing else.
 export const TIERS = {
   // Bounded input, structured output, schema-checked. Cheap and fast.
   fast: {
@@ -29,6 +34,16 @@ export const TIERS = {
     priceIn: 1.0,
     priceOut: 5.0,
     maxTokens: 4096,
+  },
+  // Cheapest tier: bounded JSON only, NO TOOL USE. Opt in per node with PAG_CHEAP_NODES.
+  // Must be enabled in your Bedrock account first (Model access -> OpenAI), and it is worth a
+  // `par bench --sample 60` before trusting it with the rerank, which is the one that moves hit@5.
+  cheap: {
+    model: process.env.PAG_MODEL_CHEAP || 'us.openai.gpt-5.6-luna',
+    priceIn: 0.44,
+    priceOut: 1.98,
+    maxTokens: 4096,
+    noTools: true,
   },
   // Unbounded reasoning over real code. Expensive; used twice per run at most.
   heavy: {
@@ -56,8 +71,18 @@ export const NODE_TIER = {
   package: 'fast',  // PR title/body/test notes. Summarisation.
 }
 
+// Nodes that may run on the cheap tier, from the environment:
+//   PAG_CHEAP_NODES=intake,rerank,plan,package
+// A node that needs tools (patch, repair, repro) is refused here rather than failing mid-run with
+// an unhelpful error from the model.
+const TOOL_NODES = new Set(['patch', 'repair', 'repro'])
+const CHEAP = new Set((process.env.PAG_CHEAP_NODES || '').split(',').map((x) => x.trim()).filter(Boolean))
+for (const n of CHEAP) {
+  if (TOOL_NODES.has(n)) throw new Error(`PAG_CHEAP_NODES includes "${n}", which needs tool use — the cheap tier (${TIERS.cheap.model}) has none. Remove it.`)
+}
+
 export function tierFor(node) {
-  const name = NODE_TIER[node]
+  const name = CHEAP.has(node) ? 'cheap' : NODE_TIER[node]
   if (!name) throw new Error(`no tier configured for node "${node}" — add it to NODE_TIER`)
   return { name, ...TIERS[name] }
 }

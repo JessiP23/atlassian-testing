@@ -47,6 +47,10 @@ env:
   PAG_ENV_PRECEDENCE: env
   PAG_MODEL_FAST: ${{ vars.BEDROCK_HAIKU_MODEL || 'us.anthropic.claude-haiku-4-5-20251001-v1:0' }}
   PAG_MODEL_HEAVY: ${{ vars.BEDROCK_OPUS_MODEL || 'us.anthropic.claude-opus-5' }}
+  # Optional third tier for the bounded JSON nodes only (no tool use). Enable the model in Bedrock
+  # first, then set repo variable PAG_CHEAP_NODES=intake,rerank,plan,package.
+  PAG_MODEL_CHEAP: ${{ vars.BEDROCK_CHEAP_MODEL || 'us.openai.gpt-5.6-luna' }}
+  PAG_CHEAP_NODES: ${{ vars.PAG_CHEAP_NODES || '' }}
   # Where the agent keeps the context tree and the per-project baselines inside the checkout.
   PAG_PAR_DIR: ${{ github.workspace }}/agent/.par
   PAG_BASELINE_DIR: ${{ github.workspace }}/agent/.baseline

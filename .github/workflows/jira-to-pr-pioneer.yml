@@ -12,9 +12,10 @@ name: Jira to PR (Pioneer, panda-agent-graph)
 #
 # Nothing here is a secret: credentials come from graph/.env on the runner, never from GitHub.
 
+# Manual for now: the Jira dispatch is owned by agent-ticket-to-pr.yml. Add the
+# repository_dispatch trigger back here (and remove ESI2 from the other one) when Pioneer tickets
+# should route to the self-hosted runner.
 on:
-  repository_dispatch:
-    types: [jira-ready-for-dev]
   workflow_dispatch:
     inputs:
       issue_key:
