@@ -1,0 +1,81 @@
+name: Jira to PR (Pioneer, panda-agent-graph)
+
+# SAME Jira rule, SAME repository_dispatch as jira-to-pr.yml. The difference is where the work
+# happens: this job runs on a self-hosted runner (your Mac for now) where the graph, the pioneer
+# worktree, node_modules, the snapshot pin, Claude Code and the AWS keys already exist — so there is
+# no cold clone and no re-install, and the 20-minute target holds. The Next.js demo keeps using
+# jira-to-pr.yml; the two are split by Jira project key (ESI2 -> here).
+#
+# Setup (once): GitHub -> JessiP23/atlassian-testing -> Settings -> Actions -> Runners -> New
+# self-hosted runner (macOS, arm64), follow the three commands, and add the label `pioneer-agent`
+# when it asks. Start it with `./run.sh` (or `./svc.sh install` to keep it running).
+#
+# Nothing here is a secret: credentials come from graph/.env on the runner, never from GitHub.
+
+on:
+  repository_dispatch:
+    types: [jira-ready-for-dev]
+  workflow_dispatch:
+    inputs:
+      issue_key:
+        description: Jira issue key (ESI2-…)
+        required: true
+        type: string
+      dry_run:
+        description: "true = do everything except push and open the PR"
+        required: false
+        default: "true"
+        type: string
+
+concurrency:
+  group: pioneer-agent-${{ github.event.client_payload.issue_key || inputs.issue_key }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: ticket -> evidence -> draft PR
+    if: startsWith(github.event.client_payload.issue_key || inputs.issue_key, 'ESI2-')
+    runs-on: [self-hosted, pioneer-agent]
+    timeout-minutes: 30
+    env:
+      ISSUE_KEY: ${{ github.event.client_payload.issue_key || inputs.issue_key }}
+      # Repo variable PAG_DRY_RUN (Settings -> Variables) flips the whole pipeline to live. Default: dry.
+      DRY_RUN: ${{ inputs.dry_run || vars.PAG_DRY_RUN || 'true' }}
+      GRAPH_DIR: ${{ vars.PAG_GRAPH_DIR || '/Users/jessipavia/agent-asset-panda/panda-agent-router/graph' }}
+      WORKTREE: ${{ vars.PAG_WORKTREE || '/Users/jessipavia/pioneer-agent' }}
+    steps:
+      - name: Preflight
+        working-directory: ${{ env.GRAPH_DIR }}
+        run: node bin/preflight.mjs --repo "$WORKTREE" --base main
+
+      - name: Run the graph
+        id: run
+        working-directory: ${{ env.GRAPH_DIR }}
+        run: |
+          set -o pipefail
+          FLAG=""; [ "$DRY_RUN" = "true" ] && FLAG="--dry-run"
+          node bin/run.mjs "$ISSUE_KEY" --repo "$WORKTREE" --base main --target qa $FLAG 2>&1 | tee run.log
+          RUN_DIR=$(ls -td runs/"$ISSUE_KEY"/*/ | head -1)
+          echo "run_dir=$RUN_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Summary (timeline + PR body + evidence)
+        if: always()
+        working-directory: ${{ env.GRAPH_DIR }}
+        run: |
+          RUN_DIR="${{ steps.run.outputs.run_dir }}"
+          [ -n "$RUN_DIR" ] || exit 0
+          { echo "## $ISSUE_KEY — $( [ "$DRY_RUN" = "true" ] && echo DRY RUN || echo LIVE )"; echo
+            cat "$RUN_DIR/timeline.md"; echo
+            [ -f "$RUN_DIR/pr-body.md" ] && { echo "---"; cat "$RUN_DIR/pr-body.md"; }
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the run folder (evidence, diff, logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pag-${{ env.ISSUE_KEY }}
+          path: ${{ env.GRAPH_DIR }}/${{ steps.run.outputs.run_dir }}
+          retention-days: 30

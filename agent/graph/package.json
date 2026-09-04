@@ -1,0 +1,27 @@
+{
+  "name": "panda-agent-graph",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LangGraph ticket->PR workflow. Deterministic phase boundaries, model-driven work inside them.",
+  "bin": {
+    "pag": "./bin/run.mjs"
+  },
+  "scripts": {
+    "run": "node bin/run.mjs",
+    "baseline": "node bin/baseline.mjs",
+    "serve": "node bin/serve.mjs",
+    "witness:install": "npx playwright install chromium"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@langchain/langgraph": "^1.4.13",
+    "@langchain/langgraph-checkpoint-postgres": "^1.0.5",
+    "@aws-sdk/client-bedrock-runtime": "^3.1124.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0"
+  }
+}

@@ -66,6 +66,8 @@ env:
 jobs:
   prepare:
     name: Transcribe ticket and branch from main
+    # ESI2 (Pioneer) tickets are handled by jira-to-pr-pioneer.yml on the self-hosted runner.
+    if: ${{ !startsWith(github.event.client_payload.issue_key || inputs.issue_key, 'ESI2-') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # The secrets context is not allowed in step-level `if:`, only in job-level `env:`.

@@ -1,0 +1,16 @@
+ci: route ESI2 (Pioneer) tickets to panda-agent-graph on a self-hosted runner
+
+Same Jira rule, same repository_dispatch. ESI2-* keys now run the LangGraph
+workflow on a self-hosted macOS runner where the pioneer worktree, node_modules,
+the snapshot pin and Claude Code already exist — no cold clone, no reinstall,
+so a ticket reaches a draft PR in minutes instead of an hour.
+
+- jira-to-pr-pioneer.yml: preflight, run the graph, publish the timeline and the
+  PR body into the job summary, upload the whole run folder (evidence, diff, logs)
+  as an artifact. Dry-run by default; repo variable PAG_DRY_RUN=false makes it live.
+- jira-to-pr.yml: skips ESI2-* so the Next.js demo path is unchanged.
+
+No secrets are added: credentials live in graph/.env on the runner.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

@@ -1,0 +1,38 @@
+agent: vendor the ticket-to-PR workflow here, with evidence and profiles
+
+Brings the LangGraph agent into this repo so it runs on a GitHub-hosted runner
+with the Jira automation that already works here — no self-hosted runner, no
+laptop, nothing to keep online.
+
+What it does per ticket (agent/graph/bin/ci.mjs): index this checkout, pin HEAD,
+intake -> locate -> plan -> reproduce -> patch -> verify -> publish.
+
+  reproduce  writes ONE test BEFORE any code changes, pass-first then invert
+             (AssertFlip: 43.6% vs 24.2% fail-to-pass), runs it, and only accepts
+             it when the runner sees it FAIL on HEAD. Frozen by sha256.
+  verify     the frozen test must then PASS (a changed hash is a refusal), and
+             only then the scoped gate runs.
+  publish    draft PR with a templated "## Evidence" (before/after, screenshots
+             and a GIF for UI tickets) and "## How to verify".
+
+Repo-agnostic by construction: agent/graph/profiles/<name>.mjs answers the five
+questions that are repo-specific (which files are UI, which project owns a file,
+the gate commands, how to run one test file, how to start the app). nextjs and nx
+ship here; PAG_PROFILE or auto-detection picks one. Moving this to another
+codebase is a profile plus PAG_ALLOWED_REMOTE, not a fork.
+
+Also in this commit:
+- indexer excludes the agent's own source (PAG_INDEX_EXCLUDE, default "agent"),
+  so retrieval spends candidates on the product, not on the agent.
+- guard DENY covers .github/ and agent/ — the agent cannot edit its own CI.
+- app.mjs waits for the PORT (TCP) and then warms the route with one long
+  request: a short-timeout probe aborts the dev server's first compile and the
+  server never finishes warming.
+- publish pushes evidence with a token URL, since a nested clone does not inherit
+  the checkout's http.extraheader auth.
+- jira-to-pr.yml keeps the Next.js demo path and skips ESI2-* keys.
+
+Nothing merges: the PR is a draft and the token cannot merge.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

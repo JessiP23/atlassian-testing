@@ -1,0 +1,154 @@
+name: Agent — ticket to PR (with evidence)
+
+# Jira -> repository_dispatch -> LangGraph agent -> draft PR carrying PROOF the bug is fixed.
+#
+# Runs entirely on a GitHub-hosted runner: nothing to install on anyone's laptop, nothing to keep
+# online. The agent is vendored in agent/ and is repo-agnostic — agent/graph/profiles/ decides how
+# to lint/test/build and how to start the app, so pointing this at another codebase is a profile
+# plus two env values, not a fork.
+#
+# What a run does (agent/graph/bin/ci.mjs):
+#   index this checkout -> pin HEAD -> intake -> locate -> plan
+#   -> reproduce  a test that FAILS on HEAD and encodes the ticket's symptom, then frozen (sha256)
+#   -> patch      Claude Code edits only the planned files; git is denied at the tool layer
+#   -> verify     the frozen test must now PASS (tampering = refusal), then the scoped gate
+#   -> publish    draft PR with ## Evidence (before/after) and ## How to verify
+#
+# Never merges: the PR is a draft and the token cannot merge.
+
+on:
+  repository_dispatch:
+    types: [jira-ready-for-dev]
+  workflow_dispatch:
+    inputs:
+      issue_key:
+        description: Jira issue key
+        required: true
+        type: string
+      dry_run:
+        description: Do everything except push the branch and open the PR
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: agent-${{ github.event.client_payload.issue_key || github.event.client_payload.key || inputs.issue_key }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  ISSUE_KEY: ${{ github.event.client_payload.issue_key || github.event.client_payload.key || inputs.issue_key }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  CLAUDE_CODE_USE_BEDROCK: '1'
+  # Actions secrets must win over any committed .env (there should be none — agent/.gitignore).
+  PAG_ENV_PRECEDENCE: env
+  PAG_MODEL_FAST: ${{ vars.BEDROCK_HAIKU_MODEL || 'us.anthropic.claude-haiku-4-5-20251001-v1:0' }}
+  PAG_MODEL_HEAVY: ${{ vars.BEDROCK_OPUS_MODEL || 'us.anthropic.claude-opus-5' }}
+  # Where the agent keeps the context tree and the per-project baselines inside the checkout.
+  PAG_PAR_DIR: ${{ github.workspace }}/agent/.par
+  PAG_BASELINE_DIR: ${{ github.workspace }}/agent/.baseline
+  PAG_RUNS_DIR: ${{ github.workspace }}/agent/runs
+  # Guards. The agent may only ever push to THIS repo, and only a draft PR.
+  PAG_ALLOWED_REMOTE: ${{ github.repository }}
+  PAG_BRANCH_PREFIX: agent/
+  PAG_BASE_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+  PAG_PR_TARGET: ${{ vars.PAG_PR_TARGET || github.event.repository.default_branch || 'main' }}
+  # Budgets: dollars and minutes. A node with no time left refuses instead of finishing late.
+  PAG_CAP_USD: ${{ vars.PAG_CAP_USD || '15' }}
+  PAG_RESERVE_USD: ${{ vars.PAG_RESERVE_USD || '2' }}
+  PAG_MAX_MINUTES: ${{ vars.PAG_MAX_MINUTES || '20' }}
+  # Evidence. Screenshots + video for UI tickets; without an app login the witness is restricted to
+  # pages that need no auth (/, /login, /signup), which is exactly right for this app.
+  PAG_UI_EVIDENCE: ${{ vars.PAG_UI_EVIDENCE || '1' }}
+  PAG_APP_URL: http://localhost:3000
+  PAG_APP_EMAIL: ${{ secrets.PAG_APP_EMAIL }}
+  PAG_APP_PASSWORD: ${{ secrets.PAG_APP_PASSWORD }}
+  PAG_EVIDENCE_BRANCH: agent-evidence
+  # Jira
+  JIRA_URL: ${{ secrets.JIRA_BASE_URL }}
+  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+
+jobs:
+  agent:
+    name: ${{ github.event.client_payload.issue_key || inputs.issue_key }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      pr_url: ${{ steps.agent.outputs.pr_url }}
+      evidence: ${{ steps.agent.outputs.evidence }}
+    steps:
+      - name: Checkout (full history — the router mines ticket→file history from merges)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install the app and the agent
+        run: |
+          npm ci --no-audit --no-fund
+          npm --prefix agent/graph install --no-audit --no-fund
+          npm install -g @anthropic-ai/claude-code@${{ vars.CLAUDE_CODE_VERSION || 'latest' }}
+
+      - name: Browser + video tools for the evidence rung
+        if: env.PAG_UI_EVIDENCE == '1'
+        run: |
+          npx --prefix agent/graph playwright install --with-deps chromium
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      - name: AWS credentials for Bedrock
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run the agent
+        id: agent
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+          # workflow_dispatch: honour the checkbox. Dispatch from Jira: repo variable, default dry.
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || (vars.PAG_DRY_RUN != 'false') }}
+        run: |
+          set -o pipefail
+          test -n "$ISSUE_KEY" || { echo "::error::no issue key in the payload"; exit 1; }
+          FLAG=""; [ "$DRY" = "true" ] && FLAG="--dry-run"
+          git config user.name  "panda-agent[bot]"
+          git config user.email "panda-agent@users.noreply.github.com"
+          node agent/graph/bin/ci.mjs "$ISSUE_KEY" --repo "$GITHUB_WORKSPACE" $FLAG
+
+      - name: Job summary — timeline, evidence, PR body
+        if: always()
+        run: |
+          RUN_DIR="${{ steps.agent.outputs.run_dir }}"
+          [ -n "$RUN_DIR" ] && [ -d "$RUN_DIR" ] || { echo "no run folder (the agent failed before tracing)" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
+          {
+            echo "## $ISSUE_KEY"
+            echo "evidence: **${{ steps.agent.outputs.evidence || 'n/a' }}** · spent \$${{ steps.agent.outputs.spent || '0' }}"
+            [ -n "${{ steps.agent.outputs.pr_url }}" ] && echo "PR: ${{ steps.agent.outputs.pr_url }}"
+            echo
+            cat "$RUN_DIR/timeline.md" 2>/dev/null
+            echo
+            if [ -f "$RUN_DIR/pr-body.md" ]; then echo "---"; echo "### PR body as it would be published"; echo; cat "$RUN_DIR/pr-body.md"; fi
+            for f in "$RUN_DIR"/evidence/repro-red.log "$RUN_DIR"/evidence/repro-green.log; do
+              [ -f "$f" ] && { echo; echo "<details><summary>$(basename "$f")</summary>"; echo; echo '```'; tail -40 "$f"; echo '```'; echo "</details>"; }
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the run folder (screenshots, video, diff, logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ env.ISSUE_KEY }}-${{ github.run_id }}
+          path: |
+            agent/runs/**
+          retention-days: 30
+          if-no-files-found: ignore

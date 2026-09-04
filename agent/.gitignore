@@ -1,0 +1,11 @@
+# The context tree and the baselines are BUILT, not authored: the CI job rebuilds them per run and
+# the refresher rebuilds them per merge. Tracking a 5 MB index also means every run shows up as a
+# diff, which is how the previous repo ended up with a private file inventory in git.
+.par/
+.baseline/
+runs/
+node_modules/
+# Credentials live in the environment (Actions secrets) or in a local, untracked file.
+graph/.env
+graph/.env.*
+!graph/.env.example

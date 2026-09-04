@@ -1,0 +1,22 @@
+{
+  "name": "panda-agent-router",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deterministic repo indexer + ticket->file router. Zero dependencies.",
+  "bin": {
+    "par": "./src/cli.mjs"
+  },
+  "scripts": {
+    "index": "node src/cli.mjs index",
+    "mine": "node src/cli.mjs mine",
+    "eval": "node src/cli.mjs eval",
+    "route": "node src/cli.mjs route"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.1124.0"
+  }
+}
