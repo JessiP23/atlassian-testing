@@ -58,17 +58,19 @@ try {
 if (cfg && !key) {
   warn('no ticket to probe', 'pass --key ABC-123 to check read access, transitions and the board\'s column names')
 } else if (cfg) {
-  const p = await probeIssue(key).catch((e) => ({ ok: false, reason: e.message }))
-  if (p.ok) {
-    ok(`can read ${key}`, `via ${p.base || 'the site URL'}`)
+  // probeIssue returns { me, issue, base, kind, verdict }: the HTTP status of READING THE ISSUE and
+  // a written diagnosis of what that status means. This read `.ok` and `.reason`, fields it has
+  // never had — so the row said FAIL "unknown" no matter what Jira answered, including when the
+  // ticket was perfectly readable, and the real explanation probeIssue had already composed was
+  // thrown away on every single run.
+  const p = await probeIssue(key).catch((e) => ({ issue: 0, verdict: e.message }))
+  if (p.issue === 200) {
+    ok(`can read ${key}`, `${p.kind}${p.me === 200 ? '' : ' · /myself is 401, which is normal for a scoped token'}`)
   } else {
-    // A scoped token 401s on the site URL and only works through api.atlassian.com; an unauthorised
-    // issue answers 404, not 403, so "not found" usually means "no permission on that project".
-    bad(`cannot read ${key}`, p.reason || 'unknown',
-      'a 404 here usually means the token has no permission on that PROJECT, not that the key is wrong — ask for the agent account to be added to it')
+    bad(`cannot read ${key}`, `HTTP ${p.issue || 'no response'}`, p.verdict || 'no diagnosis')
   }
 
-  if (p.ok) {
+  if (p.issue === 200) {
     const st = await currentStatus(key).catch(() => null)
     const ts = await listTransitions(key).catch(() => [])
     if (ts.length) {
@@ -128,9 +130,13 @@ if (token && allowed) {
     // Workflows only ever dispatch from the DEFAULT branch. A workflow perfect on a feature branch
     // simply never fires, and there is no error anywhere to tell you why.
     const wf = await gh(`/repos/${allowed}/contents/.github/workflows/agent-ticket-to-pr.yml?ref=${r.body.default_branch}`)
+    // A WARNING, not a failure: this only matters if you are driving the agent from Jira through
+    // GitHub Actions IN THIS REPO. A local run (bin/ci.mjs against a worktree) never touches it,
+    // and on a repo you do not own, installing a workflow is a PR they have to merge — a far bigger
+    // ask than a token, and not a prerequisite for anything else here.
     if (wf.status === 200) ok(`the workflow is on ${r.body.default_branch}`)
-    else bad(`agent-ticket-to-pr.yml is NOT on ${r.body.default_branch}`, `HTTP ${wf.status}`,
-      'repository_dispatch only fires workflows that exist on the default branch — merge it there or nothing happens, silently')
+    else warn(`agent-ticket-to-pr.yml is not on ${r.body.default_branch}`, `HTTP ${wf.status}`,
+      'only needed for Jira -> repository_dispatch in this repo. Local runs do not use it. repository_dispatch fires only workflows on the default branch, so it would have to be merged there.')
     const merged = await gh(`/repos/${allowed}/contents/.github/workflows/agent-pr-merged.yml?ref=${r.body.default_branch}`)
     if (merged.status === 200) ok(`the merge-close workflow is on ${r.body.default_branch}`)
     else warn('agent-pr-merged.yml is not on the default branch', 'tickets will not move to Done on merge')
