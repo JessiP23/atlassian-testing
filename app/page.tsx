@@ -3,7 +3,8 @@ import Image from "next/image";
 export default function Home() {
   return (
     <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
+      {/* KAN-12: padding is mobile-first — 24px/64px at 320px, restored to 64px/128px from sm up. */}
+      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-16 px-6 bg-white dark:bg-black sm:items-start sm:py-32 sm:px-16">
         <Image
           className="dark:invert h-5 w-[100px]"
           src="/next.svg"
