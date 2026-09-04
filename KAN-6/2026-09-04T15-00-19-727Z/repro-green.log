@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [chromium] › ../runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:32:1 › KAN-6: home page theme toggle — light/dark, persisted, no flash (3.1s)
+
+  1 passed (3.7s)

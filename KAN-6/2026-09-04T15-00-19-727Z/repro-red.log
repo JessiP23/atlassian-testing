@@ -1,0 +1,309 @@
+
+Running 1 test using 1 worker
+
+  ✘  1 [chromium] › ../runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:32:1 › KAN-6: home page theme toggle — light/dark, persisted, no flash (33.6s)
+
+
+  1) [chromium] › ../runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:32:1 › KAN-6: home page theme toggle — light/dark, persisted, no flash 
+
+    Error: a visible "Toggle theme" button on the home page
+
+    expect(locator).toBeVisible() failed
+
+    Locator: getByRole('button', { name: 'Toggle theme' })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - a visible "Toggle theme" button on the home page with timeout 5000ms
+      - waiting for getByRole('button', { name: 'Toggle theme' })
+
+
+      57 |     await expect.soft(body).toHaveCSS('background-color', WHITE)
+      58 |     await expect.soft(heading).toHaveCSS('color', BLACK)
+    > 59 |     await expect.soft(toggle, 'a visible "Toggle theme" button on the home page').toBeVisible({ timeout: 5_000 })
+         |                                                                                   ^
+      60 |     const box = await toggle.boundingBox({ timeout: 3_000 }).catch(() => null)
+      61 |     expect.soft(box, 'the "Toggle theme" button has a position on the page').not.toBeNull()
+      62 |     if (box) {
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:59:83
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:54:3
+
+    Error: the "Toggle theme" button has a position on the page
+
+    expect(received).not.toBeNull()
+
+    Received: null
+
+      59 |     await expect.soft(toggle, 'a visible "Toggle theme" button on the home page').toBeVisible({ timeout: 5_000 })
+      60 |     const box = await toggle.boundingBox({ timeout: 3_000 }).catch(() => null)
+    > 61 |     expect.soft(box, 'the "Toggle theme" button has a position on the page').not.toBeNull()
+         |                                                                                  ^
+      62 |     if (box) {
+      63 |       const vp = page.viewportSize()
+      64 |       expect.soft(box.x + box.width / 2, 'toggle sits in the right half of the page').toBeGreaterThan(vp.width / 2)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:61:82
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:54:3
+
+    Error: class="dark" on <html> after toggling
+
+    expect(received).toMatch(expected)
+
+    Expected pattern: /\bdark\b/
+    Received string:  "geist_a71539c9-module__T19VSG__variable geist_mono_8d43a2aa-module__8Li5zG__variable h-full antialiased"
+
+      73 |   // class, not the media query — the OS still asks for light here).
+      74 |   await check(page, '02-after-toggle-dark', async () => {
+    > 75 |     expect.soft(await htmlClass(page), 'class="dark" on <html> after toggling').toMatch(/\bdark\b/)
+         |                                                                                 ^
+      76 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+      77 |     await expect.soft(heading, 'dark: classes respond to class="dark", not prefers-color-scheme').toHaveCSS('color', ZINC_50, FAST)
+      78 |     expect.soft(await storedTheme(page), 'localStorage.theme after toggling to dark').toBe('dark')
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:75:81
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:74:3
+
+    Error: expect(locator).toHaveCSS(expected) failed
+
+    Locator:  locator('body')
+    Expected: "rgb(10, 10, 10)"
+    Received: "rgb(255, 255, 255)"
+    Timeout:  4000ms
+
+    Call log:
+      - Expect "soft toHaveCSS" with timeout 4000ms
+      - waiting for locator('body')
+        12 × locator resolved to <body class="min-h-full flex flex-col">…</body>
+           - unexpected value "rgb(255, 255, 255)"
+
+
+      74 |   await check(page, '02-after-toggle-dark', async () => {
+      75 |     expect.soft(await htmlClass(page), 'class="dark" on <html> after toggling').toMatch(/\bdark\b/)
+    > 76 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+         |                             ^
+      77 |     await expect.soft(heading, 'dark: classes respond to class="dark", not prefers-color-scheme').toHaveCSS('color', ZINC_50, FAST)
+      78 |     expect.soft(await storedTheme(page), 'localStorage.theme after toggling to dark').toBe('dark')
+      79 |   })
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:76:29
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:74:3
+
+    Error: dark: classes respond to class="dark", not prefers-color-scheme
+
+    expect(locator).toHaveCSS(expected) failed
+
+    Locator:  getByRole('heading', { level: 1 })
+    Expected: "lab(98.26 0 0)"
+    Received: "rgb(0, 0, 0)"
+    Timeout:  4000ms
+
+    Call log:
+      - dark: classes respond to class="dark", not prefers-color-scheme with timeout 4000ms
+      - waiting for getByRole('heading', { level: 1 })
+        12 × locator resolved to <h1 class="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">…</h1>
+           - unexpected value "rgb(0, 0, 0)"
+
+
+      75 |     expect.soft(await htmlClass(page), 'class="dark" on <html> after toggling').toMatch(/\bdark\b/)
+      76 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+    > 77 |     await expect.soft(heading, 'dark: classes respond to class="dark", not prefers-color-scheme').toHaveCSS('color', ZINC_50, FAST)
+         |                                                                                                   ^
+      78 |     expect.soft(await storedTheme(page), 'localStorage.theme after toggling to dark').toBe('dark')
+      79 |   })
+      80 |
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:77:99
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:74:3
+
+    Error: localStorage.theme after toggling to dark
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "dark"
+    Received: null
+
+      76 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+      77 |     await expect.soft(heading, 'dark: classes respond to class="dark", not prefers-color-scheme').toHaveCSS('color', ZINC_50, FAST)
+    > 78 |     expect.soft(await storedTheme(page), 'localStorage.theme after toggling to dark').toBe('dark')
+         |                                                                                       ^
+      79 |   })
+      80 |
+      81 |   await page.reload()
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:78:87
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:74:3
+
+    Error: localStorage.theme survives a reload
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "dark"
+    Received: null
+
+      86 |   await check(page, '03-reloaded-still-dark', async () => {
+      87 |     const frame = await firstFrame(page)
+    > 88 |     expect.soft(await storedTheme(page), 'localStorage.theme survives a reload').toBe('dark')
+         |                                                                                  ^
+      89 |     expect.soft(await htmlClass(page), 'dark restored on reload').toMatch(/\bdark\b/)
+      90 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+      91 |     expect.soft(frame.htmlClass, 'first painted frame already carries the dark class — no flash').toMatch(/\bdark\b/)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:88:82
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:86:3
+
+    Error: dark restored on reload
+
+    expect(received).toMatch(expected)
+
+    Expected pattern: /\bdark\b/
+    Received string:  "geist_a71539c9-module__T19VSG__variable geist_mono_8d43a2aa-module__8Li5zG__variable h-full antialiased"
+
+      87 |     const frame = await firstFrame(page)
+      88 |     expect.soft(await storedTheme(page), 'localStorage.theme survives a reload').toBe('dark')
+    > 89 |     expect.soft(await htmlClass(page), 'dark restored on reload').toMatch(/\bdark\b/)
+         |                                                                   ^
+      90 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+      91 |     expect.soft(frame.htmlClass, 'first painted frame already carries the dark class — no flash').toMatch(/\bdark\b/)
+      92 |     expect.soft(frame.bodyBg, 'first painted frame already dark — no flash').toBe(NEAR_BLACK)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:89:67
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:86:3
+
+    Error: expect(locator).toHaveCSS(expected) failed
+
+    Locator:  locator('body')
+    Expected: "rgb(10, 10, 10)"
+    Received: "rgb(255, 255, 255)"
+    Timeout:  4000ms
+
+    Call log:
+      - Expect "soft toHaveCSS" with timeout 4000ms
+      - waiting for locator('body')
+        12 × locator resolved to <body class="min-h-full flex flex-col">…</body>
+           - unexpected value "rgb(255, 255, 255)"
+
+
+      88 |     expect.soft(await storedTheme(page), 'localStorage.theme survives a reload').toBe('dark')
+      89 |     expect.soft(await htmlClass(page), 'dark restored on reload').toMatch(/\bdark\b/)
+    > 90 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+         |                             ^
+      91 |     expect.soft(frame.htmlClass, 'first painted frame already carries the dark class — no flash').toMatch(/\bdark\b/)
+      92 |     expect.soft(frame.bodyBg, 'first painted frame already dark — no flash').toBe(NEAR_BLACK)
+      93 |   })
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:90:29
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:86:3
+
+    Error: first painted frame already carries the dark class — no flash
+
+    expect(received).toMatch(expected)
+
+    Expected pattern: /\bdark\b/
+    Received string:  "geist_a71539c9-module__T19VSG__variable geist_mono_8d43a2aa-module__8Li5zG__variable h-full antialiased"
+
+      89 |     expect.soft(await htmlClass(page), 'dark restored on reload').toMatch(/\bdark\b/)
+      90 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+    > 91 |     expect.soft(frame.htmlClass, 'first painted frame already carries the dark class — no flash').toMatch(/\bdark\b/)
+         |                                                                                                   ^
+      92 |     expect.soft(frame.bodyBg, 'first painted frame already dark — no flash').toBe(NEAR_BLACK)
+      93 |   })
+      94 |
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:91:99
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:86:3
+
+    Error: first painted frame already dark — no flash
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "rgb(10, 10, 10)"
+    Received: "rgb(255, 255, 255)"
+
+      90 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+      91 |     expect.soft(frame.htmlClass, 'first painted frame already carries the dark class — no flash').toMatch(/\bdark\b/)
+    > 92 |     expect.soft(frame.bodyBg, 'first painted frame already dark — no flash').toBe(NEAR_BLACK)
+         |                                                                              ^
+      93 |   })
+      94 |
+      95 |   await toggle.click({ timeout: 5_000 }).catch(() => {})
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:92:78
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:86:3
+
+    Error: localStorage.theme is 'light' after toggling back
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: "light"
+    Received: null
+
+      101 |     await expect.soft(body).toHaveCSS('background-color', WHITE, FAST)
+      102 |     await expect.soft(heading).toHaveCSS('color', BLACK, FAST)
+    > 103 |     expect.soft(await storedTheme(page), "localStorage.theme is 'light' after toggling back").toBe('light')
+          |                                                                                               ^
+      104 |   })
+      105 |
+      106 |   // A brand-new visitor whose OS asks for dark.
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:103:95
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:99:3
+
+    Error: dark class applied from prefers-color-scheme
+
+    expect(received).toMatch(expected)
+
+    Expected pattern: /\bdark\b/
+    Received string:  "geist_a71539c9-module__T19VSG__variable geist_mono_8d43a2aa-module__8Li5zG__variable h-full antialiased"
+
+      114 |   await check(page, '05-first-visit-prefers-dark', async () => {
+      115 |     const frame = await firstFrame(page)
+    > 116 |     expect.soft(await htmlClass(page), 'dark class applied from prefers-color-scheme').toMatch(/\bdark\b/)
+          |                                                                                        ^
+      117 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+      118 |     await expect.soft(heading, 'dark: heading colour follows the class').toHaveCSS('color', ZINC_50, FAST)
+      119 |     expect.soft(frame.htmlClass, 'first painted frame already dark — no flash').toMatch(/\bdark\b/)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:116:88
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:114:3
+
+    Error: first painted frame already dark — no flash
+
+    expect(received).toMatch(expected)
+
+    Expected pattern: /\bdark\b/
+    Received string:  "geist_a71539c9-module__T19VSG__variable geist_mono_8d43a2aa-module__8Li5zG__variable h-full antialiased"
+
+      117 |     await expect.soft(body).toHaveCSS('background-color', NEAR_BLACK, FAST)
+      118 |     await expect.soft(heading, 'dark: heading colour follows the class').toHaveCSS('color', ZINC_50, FAST)
+    > 119 |     expect.soft(frame.htmlClass, 'first painted frame already dark — no flash').toMatch(/\bdark\b/)
+          |                                                                                 ^
+      120 |   })
+      121 |
+      122 |   await shot(page, '06-first-visit-prefers-dark-full')
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:119:81
+        at check (/home/runner/work/atlassian-testing/atlassian-testing/agent/graph/witness/fixtures.mjs:62:5)
+        at /home/runner/work/atlassian-testing/atlassian-testing/agent/runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:114:3
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    ../runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/pw-before/KAN-6-KAN-6-home-page-them-8dd9f-ght-dark-persisted-no-flash-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    ../runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/pw-before/KAN-6-KAN-6-home-page-them-8dd9f-ght-dark-persisted-no-flash-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: ../runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/pw-before/KAN-6-KAN-6-home-page-them-8dd9f-ght-dark-persisted-no-flash-chromium/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    ../runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/pw-before/KAN-6-KAN-6-home-page-them-8dd9f-ght-dark-persisted-no-flash-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace ../runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/pw-before/KAN-6-KAN-6-home-page-them-8dd9f-ght-dark-persisted-no-flash-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [chromium] › ../runs/KAN-6/2026-09-04T15-00-19-727Z/evidence/witness/KAN-6.spec.mjs:32:1 › KAN-6: home page theme toggle — light/dark, persisted, no flash 
