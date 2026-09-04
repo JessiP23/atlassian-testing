@@ -41,6 +41,24 @@ export const GENERATED = [
   /^\.next\//, /^out\//,                                          // nextjs profile
 ]
 
+/**
+ * The agent's own OUTPUT, as opposed to its source. Test-runner artefacts, the run folder, the
+ * index: these appear in `git status` when they are not ignored, and DENY (`^agent/`) then refuses
+ * a run whose code changes were perfectly correct — which is exactly what happened on KAN-6, at the
+ * last step, after the fix was written and the witness had gone green. Scratch is not a diff, so
+ * it is filtered out of the changed set before the guard ever sees it. Editing agent SOURCE stays
+ * denied.
+ */
+export const SCRATCH = [
+  /(^|\/)pw-(out|manual|before|after)\//,      // Playwright output dirs
+  /(^|\/)test-results\//,
+  /(^|\/)playwright-report\//,
+  /^agent\/(runs|\.par|\.baseline)\//,
+  /^\.pag\//,
+]
+
+export const isScratch = (p) => SCRATCH.some((re) => re.test(p))
+
 export function isDenied(path) {
   return DENY.some((re) => re.test(path))
 }

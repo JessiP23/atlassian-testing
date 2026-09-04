@@ -100,7 +100,10 @@ export function witnessSpecPath(issueKey) {
 
 export function witnessCommand(specFile) {
   // cd first: `npx playwright` from the product worktree would try to DOWNLOAD playwright.
-  return `cd ${GRAPH_DIR} && PAG_WITNESS_DIR=${path.dirname(specFile)} npx playwright test --config ${WITNESS_CONFIG} ${path.basename(specFile)}`
+  // PAG_WITNESS_OUT is part of the command, not a default, because whoever runs this by hand
+  // (the patch step does) must not drop screenshots into the working tree.
+  const manual = path.join(path.dirname(path.dirname(specFile)), 'pw-manual')
+  return `cd ${GRAPH_DIR} && PAG_WITNESS_DIR=${path.dirname(specFile)} PAG_WITNESS_OUT=${manual} npx playwright test --config ${WITNESS_CONFIG} ${path.basename(specFile)}`
 }
 
 /**

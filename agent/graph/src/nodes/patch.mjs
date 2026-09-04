@@ -29,7 +29,7 @@ import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
 import { tierFor } from '../lib/models.mjs'
-import { classify, overBudget, isDenied } from '../lib/guard.mjs'
+import { classify, overBudget, isDenied, isScratch } from '../lib/guard.mjs'
 import { buildContextPack } from '../lib/contextpack.mjs'
 import { runClaude } from '../lib/agent.mjs'
 
@@ -179,7 +179,7 @@ export function patchNode({ budget, onProgress = () => {} }) {
     const { stdout: names } = await exec('git', ['diff', '--name-only', 'HEAD'], { cwd: s.repo, maxBuffer: 1 << 24 })
     const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: s.repo, maxBuffer: 1 << 24 })
     const changed = [...new Set([...names.split('\n'), ...untracked.split('\n')].map((x) => x.trim()).filter(Boolean))]
-      .filter((p) => !p.startsWith('.pag/'))
+      .filter((p) => !isScratch(p))
 
     // Persist the diff NOW, before any guard can refuse and before the next run resets the
     // worktree. A dry run exists so you can read the diff; losing it defeats the exercise.

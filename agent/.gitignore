@@ -9,3 +9,6 @@ node_modules/
 graph/.env
 graph/.env.*
 !graph/.env.example
+
+# Playwright output, if anything ever runs without PAG_WITNESS_OUT.
+graph/witness/pw-out/

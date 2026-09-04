@@ -1,0 +1,36 @@
+fix(witness): keep output out of the repo, and show every state before/after
+
+KAN-6 wrote a correct theme toggle, the frozen witness went green, tsc and eslint
+were clean — and the run was refused at the last step with touched_denied_path.
+The denied paths were Playwright's own screenshots. Three problems, all mine.
+
+1. The output directory defaulted to `./pw-out`, which resolves to
+   agent/graph/witness/pw-out — inside the repo and not gitignored. The patch
+   step runs the witness command by hand (we hand it the command), so its
+   screenshots appeared as untracked files under agent/, which DENY covers. The
+   default is now the OS temp dir, the command we hand out carries an explicit
+   PAG_WITNESS_OUT under the run folder, and pw-out/ is gitignored.
+
+2. Agent OUTPUT was being judged as if it were a diff. guard now exports
+   SCRATCH/isScratch (test-runner artefacts, run folder, index, .pag) and patch
+   filters those out of the changed set before classifying. Editing agent SOURCE
+   stays denied — that distinction was missing.
+
+3. The evidence showed one "before" frame and no "after" states, because a hard
+   `expect` throws on the first unmet criterion: the red run died at step 1 of a
+   four-state flow. witness/fixtures.mjs now exports `check(page, name, fn)` —
+   soft assertions plus a screenshot of the state they judged — and the prompt
+   requires one per acceptance criterion. The red run walks the whole flow,
+   captures every state, and still fails (Playwright fails a test with failed
+   soft assertions), so "before" is a complete picture of what was broken.
+
+   publish then pairs the two runs BY STATE NAME rather than by index. The runs
+   do not produce the same number of frames — before the fix the flow breaks
+   partway — so index pairing put "initial load" beside "reloaded" and the table
+   lied. States the broken build never reached are labelled as such, and that
+   gap is called out as part of the evidence.
+
+Also adds agent/ROADMAP.md: what is proven, by which run, and what is next.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

@@ -53,13 +53,27 @@ function evidenceBlock(s, budget, href = (f) => `evidence/${f}`) {
       '',
     )
     if (isE2e && (r.before?.shots?.length || e.after?.shots?.length)) {
-      const pairs = Math.max(r.before?.shots?.length || 0, e.after?.shots?.length || 0)
-      lines.push('| Before (`' + s.baseBranch + '@' + String(s.baseSha).slice(0, 7) + '`) | After this patch |', '|---|---|')
-      for (let i = 0; i < Math.min(pairs, 6); i++) {
-        const b = r.before?.shots?.[i], a = e.after?.shots?.[i]
-        lines.push(`| ${b ? `![before](${href(b)})` : ''} | ${a ? `![after](${href(a)})` : ''} |`)
+      // PAIR BY STATE NAME, not by index. The two runs do not produce the same number of frames:
+      // before the fix the flow breaks partway, after it completes. Index pairing then puts
+      // "01-initial-load" next to "03-reloaded" and the table lies. The name is the contract
+      // (witness/fixtures.mjs), so `02-after-toggle-dark` sits beside its own counterpart and a
+      // state the broken app never reached is shown as exactly that.
+      const key = (f) => String(f).replace(/^(before|after)-/, '').replace(/\.png$/, '')
+      const label = (k) => k.replace(/^\d+[-_]?/, '').replace(/[-_]+/g, ' ').trim() || k
+      const B = new Map((r.before?.shots || []).map((f) => [key(f), f]))
+      const A = new Map((e.after?.shots || []).map((f) => [key(f), f]))
+      const states = [...new Set([...B.keys(), ...A.keys()])].sort()
+      lines.push(
+        `| State | Before (\`${s.baseBranch}@${String(s.baseSha).slice(0, 7)}\`) | After this patch |`,
+        '|---|---|---|',
+      )
+      for (const k of states.slice(0, 8)) {
+        const b = B.get(k), a = A.get(k)
+        lines.push(`| **${label(k)}** | ${b ? `![before ${label(k)}](${href(b)})` : '_not reached before the fix_'} | ${a ? `![after ${label(k)}](${href(a)})` : '_not reached_'} |`)
       }
       lines.push('')
+      const missing = states.filter((k) => !B.has(k))
+      if (missing.length) lines.push(`The broken build never reached ${missing.length} of these states — that gap is part of the evidence.`, '')
       if (e.after?.gif) lines.push(`![walkthrough after the fix](${href(e.after.gif)})`, '')
       const links = [
         r.before?.video && `[before.webm](${href(r.before.video)})`, e.after?.video && `[after.webm](${href(e.after.video)})`,

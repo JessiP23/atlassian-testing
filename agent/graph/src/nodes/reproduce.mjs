@@ -66,15 +66,25 @@ ${s.plan.impactedFiles.map((f) => `- ${f}`).join('\n')}
     ${specFile}
 
 Start from:
-    import { test, expect, ${hasLogin ? 'login, ' : ''}shot } from '${WITNESS_FIXTURES}'
+    import { test, expect, check, ${hasLogin ? 'login, ' : ''}shot } from '${WITNESS_FIXTURES}'
 ${hasLogin
   ? `- \`login(page)\` signs in as the QA user (env-provided; never hard-code credentials).`
   : `- THERE IS NO USABLE LOGIN in this environment. Do NOT import or call \`login\`, do not type any
   credentials, and do not try to reach a screen behind authentication. You may only visit pages that
   render WITHOUT signing in: \`/login\`, \`/signup\`, \`/forgot-password\`. If the ticket's symptom is
   only visible after signing in, stop and answer \`REPRO: none needs an authenticated session\`.`}
-- \`shot(page, '01-before-submit')\` saves a named screenshot — take one at every meaningful state
-  (the screen the ticket is about, right before the action, right after). 2–6 shots.
+- \`check(page, '02-after-toggle-dark', async () => { ... })\` is HOW YOU ASSERT. It runs soft
+  assertions and screenshots the state it judged. Use it for EVERY acceptance criterion, in the
+  order a user meets them, naming the STATE:
+      01-initial-load · 02-after-toggle-dark · 03-reloaded-still-dark · 04-toggled-back-light
+  Soft matters: a hard \`expect\` throws on the first unmet criterion, so the run's only evidence is
+  one frame of a flow nobody saw. With \`check\` the spec walks the WHOLE flow, captures every
+  state, and still FAILS at the end if any assertion failed. Inside a check use \`expect.soft(...)\`.
+- \`shot(page, 'NN-name')\` alone for a state worth picturing but not asserting.
+- The same spec re-runs after the fix and the PR pairs the two runs BY SCREENSHOT NAME, so keep the
+  names stable and descriptive — \`02-after-toggle-dark\` before vs after is the whole story.
+- Cover BOTH SIDES of a toggle or a mode: if the ticket is about light and dark, assert and shoot
+  light AND dark, not only the new one.
 - Locate elements by role/label/text (\`getByRole\`, \`getByLabel\`, \`getByText\`), never by CSS class.
   Wait with \`expect(...).toBeVisible()\` / \`toHaveText\`, never \`waitForTimeout\`.
 - For a layout/padding/colour symptom assert computed style, which is exact and stable:
@@ -93,7 +103,9 @@ ${hasLogin
    and locators work.
 2. Invert only the final assertion to the EXPECTED behaviour from the acceptance criteria. Run again.
    It must now FAIL with a message that shows the wrong state.
-3. Stop, leaving the file in its inverted (failing) state.
+3. Stop, leaving the file in its inverted (failing) state. Check the run produced ONE SCREENSHOT
+   PER \`check\` — if it stopped after the first frame you used a hard \`expect\` where \`check\`
+   belongs.
 ${previous ? `\n## Previous attempt\n${previous}\n` : ''}
 Finish with one line: \`REPRO: red\` or \`REPRO: none <one-sentence reason>\` (e.g. the flow needs data the QA
 account does not have, or the symptom is backend-only and not visible in the client).`
