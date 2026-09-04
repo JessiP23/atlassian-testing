@@ -1,0 +1,6 @@
+
+Running 1 test using 1 worker
+
+  ✓  1 [chromium] › ../runs/KAN-10/2026-09-04T19-32-36-577Z/evidence/witness/KAN-10.spec.mjs:48:1 › KAN-10 home page ships real site metadata and social preview tags (1.6s)
+
+  1 passed (2.2s)
