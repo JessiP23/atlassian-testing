@@ -10,6 +10,8 @@
 //     │          │          │        │                                                          │
 //     │          │          │        │                 ┌────────────────────────────────────────┘
 //     │          │          │        │                 ▼
+//     │          │          │        │                 └─(out of clock/attempts, diff exists)──▶ handover ──▶ publish
+//     │          │          │        │
 //     └──────────┴──────────┴────────┴──────────────▶ refuse ──▶ END
 //
 // Every node can route to `refuse`, and refusing is a SUCCESSFUL terminal state — the workflow
@@ -52,7 +54,7 @@ const orRefuse = (next) => (s) => (s.refusal ? 'refuse' : next)
 //
 // Bounded at MAX_REPLANS so a run cannot ping-pong between planning and patch, and an escalation
 // that names nothing usable goes straight to refuse — there is nothing to widen.
-function afterPatch(s) {
+export function afterPatch(s) {
   if (s.escalation) {
     const canRetry = s.escalation.neededFiles?.length && (s.replans ?? 0) < MAX_REPLANS
     return canRetry ? 'planning' : 'refuse'
@@ -60,16 +62,48 @@ function afterPatch(s) {
   return s.refusal ? 'refuse' : 'verify'
 }
 
-function afterVerify(s) {
+// Whether a red gate is worth another repair attempt, or whether it is time to hand the work to a
+// human. THREE answers, and the third is the one that was missing:
+//
+//   repair    attempts left AND enough clock for an Opus session to read a file and edit it
+//   handover  out of attempts or out of clock, but there IS a diff — publish it as INCOMPLETE
+//   refuse    nothing to hand over (no diff, or the refusal is fatal: a leaked credential, a
+//             tampered repro, the wrong remote)
+//
+// Before this, KAN-6 spent 20 minutes producing a correct fix and then deleted it, because the
+// clock ran out during repair and `time_budget` was a refusal. The expensive part of a run is the
+// diagnosis; discarding it at the last step is the single worst thing this workflow can do.
+const SALVAGE = process.env.PAG_HANDOVER !== '0'
+
+export function afterVerifyWith(budget) {
+  return (s) => {
+    if (s.refusal) return 'refuse'
+    if (s.gate?.ok) return 'approve'
+    const attemptsLeft = (s.attempts ?? 0) < MAX_REPAIR_ATTEMPTS
+    const clock = budget.timeFor('repair') >= 45_000
+    if (attemptsLeft && clock) return 'repair'
+    return SALVAGE && s.changed?.length ? 'handover' : 'refuse'
+  }
+}
+
+export function afterRepair(s) {
   if (s.refusal) return 'refuse'
-  if (s.gate?.ok) return 'approve'
-  if ((s.attempts ?? 0) >= MAX_REPAIR_ATTEMPTS) return 'refuse'
-  return 'repair'
+  if (s.outOfTime) return SALVAGE && s.changed?.length ? 'handover' : 'refuse'
+  return 'verify'
 }
 
 export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProgress = () => {}, commentOnJira = true }) {
   // One wrapper, applied uniformly: a node that must remember to instrument itself eventually won't.
-  const N = (name, fn) => (trace ? traced(trace, name, fn, onProgress) : fn)
+  const inner = (name, fn) => (trace ? traced(trace, name, fn, onProgress) : fn)
+  // Per-phase wall time, recorded once here so the PR footer can show where the 20 minutes went
+  // ("reproduce 214s · patch 186s · verify 41s") — the number you actually tune the budget on.
+  const N = (name, fn) => {
+    const wrapped = inner(name, fn)
+    return async (s) => {
+      const t0 = Date.now()
+      try { return await wrapped(s) } finally { budget.recordPhase(name, Date.now() - t0) }
+    }
+  }
 
   const refuseNode = async (s) => {
     // An escalation that reaches here either named nothing usable or already had its one re-plan.
@@ -106,14 +140,28 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     return { refusal: r, ledger }
   }
 
+  // A deliberately tiny node: it records WHY the run is handing over and nothing else. Publish
+  // reads `incomplete` and changes the title, the label, the first block of the body and the Jira
+  // comment accordingly. Keeping the decision in its own node means it shows up in the timeline as
+  // its own step, so a reviewer of the run can see exactly where the clock ran out.
+  const handoverNode = async (s) => {
+    const left = Math.round(budget.timeLeftMs() / 1000)
+    const reason = (s.attempts ?? 0) >= MAX_REPAIR_ATTEMPTS && left > 60
+      ? `It used all ${MAX_REPAIR_ATTEMPTS} repair attempts and the gate is still red.`
+      : `It reached the ${budget.maxMinutes}-minute deadline with ${left}s left — not enough to attempt another fix and still publish.`
+    onProgress(`HANDOVER: ${reason} Publishing the diff as an incomplete draft.`)
+    return { incomplete: { reason, at: 'verify', timeLeftMs: budget.timeLeftMs() }, ledger: budget.report() }
+  }
+
   const g = new StateGraph(S)
     .addNode('intake', N('intake', intakeNode({ budget })))
     .addNode('locate', N('locate', locateNode({ budget, onProgress })))
     .addNode('planning', N('planning', planNode({ budget })))
     .addNode('reproduce', N('reproduce', reproduceNode({ budget, onProgress })))
     .addNode('patch', N('patch', patchNode({ budget, onProgress })))
-    .addNode('verify', N('verify', verifyNode({ onProgress })))
+    .addNode('verify', N('verify', verifyNode({ budget, onProgress })))
     .addNode('repair', N('repair', repairNode({ budget, onProgress })))
+    .addNode('handover', N('handover', handoverNode))
     .addNode('approve', N('approve', approveNode()))
     .addNode('publish', N('publish', async (s) => ({ ...(await publishNode({ budget, dryRun })(s)), ledger: budget.report() })))
     .addNode('refuse', N('refuse', refuseNode))
@@ -124,9 +172,10 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     .addConditionalEdges('planning', orRefuse('reproduce'), ['reproduce', 'refuse'])
     .addConditionalEdges('reproduce', orRefuse('patch'), ['patch', 'refuse'])
     .addConditionalEdges('patch', afterPatch, ['verify', 'planning', 'refuse'])
-    .addConditionalEdges('verify', afterVerify, ['approve', 'repair', 'refuse'])
+    .addConditionalEdges('verify', afterVerifyWith(budget), ['approve', 'repair', 'handover', 'refuse'])
     .addConditionalEdges('approve', orRefuse('publish'), ['publish', 'refuse'])
-    .addConditionalEdges('repair', orRefuse('verify'), ['verify', 'refuse'])   // the bounded loop
+    .addConditionalEdges('repair', afterRepair, ['verify', 'handover', 'refuse'])   // the bounded loop
+    .addEdge('handover', 'publish')
     .addEdge('publish', END)
     .addEdge('refuse', END)
 

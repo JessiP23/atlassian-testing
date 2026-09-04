@@ -63,8 +63,20 @@ env:
   # Budgets: dollars and minutes. A node with no time left refuses instead of finishing late.
   PAG_CAP_USD: ${{ vars.PAG_CAP_USD || '15' }}
   PAG_RESERVE_USD: ${{ vars.PAG_RESERVE_USD || '2' }}
-  PAG_MAX_MINUTES: ${{ vars.PAG_MAX_MINUTES || '30' }}
-  PAG_REPRO_MINUTES: ${{ vars.PAG_REPRO_MINUTES || '7' }}
+  # THE deadline. agent/graph/src/lib/budget.mjs slices it per phase and reserves what publish
+  # needs, so a run cannot spend the clock on the reproducing test and then have nothing to show.
+  # The two ceilings below are the only per-phase knobs; everything else adapts.
+  PAG_MAX_MINUTES: ${{ vars.PAG_MAX_MINUTES || '20' }}
+  PAG_REPRO_MINUTES: ${{ vars.PAG_REPRO_MINUTES || '6' }}
+  PAG_PATCH_MINUTES: ${{ vars.PAG_PATCH_MINUTES || '7' }}
+  # A run that hits the deadline with the gate still red publishes an INCOMPLETE draft PR carrying
+  # the diff, the evidence and the remaining failures, instead of deleting the branch. Set to 0 to
+  # go back to refusing.
+  PAG_HANDOVER: ${{ vars.PAG_HANDOVER || '1' }}
+  # Write the PR link back onto the ticket. Set PAG_JIRA_TRANSITION once you know your board's
+  # column name (e.g. "In Review") to move the ticket as well.
+  PAG_JIRA_COMMENT: '1'
+  PAG_JIRA_TRANSITION: ${{ vars.PAG_JIRA_TRANSITION || '' }}
   # Evidence. Screenshots + video for UI tickets; without an app login the witness is restricted to
   # pages that need no auth (/, /login, /signup), which is exactly right for this app.
   PAG_UI_EVIDENCE: ${{ vars.PAG_UI_EVIDENCE || '1' }}
@@ -81,7 +93,7 @@ jobs:
   agent:
     name: ${{ github.event.client_payload.issue_key || inputs.issue_key }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35   # backstop only: the agent enforces PAG_MAX_MINUTES itself
     outputs:
       pr_url: ${{ steps.agent.outputs.pr_url }}
       evidence: ${{ steps.agent.outputs.evidence }}
@@ -95,18 +107,54 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            agent/graph/package-lock.json
 
-      - name: Install the app and the agent
+      # Chromium is ~130 MB and `playwright install --with-deps` was 60-110s of every run, on the
+      # critical path, before the agent had read the ticket. Cached on the Playwright version, so
+      # it is a ~6s restore until that version changes.
+      - name: Cache the Playwright browser
+        if: env.PAG_UI_EVIDENCE == '1'
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('agent/graph/package-lock.json') }}
+
+      # All four installs are independent. In series they were ~150s; concurrently they are bounded
+      # by the slowest one. Failures still fail the step — `wait -n` is checked per job.
+      - name: Install the app, the agent, Claude Code and the browser
         run: |
-          npm ci --no-audit --no-fund
-          npm --prefix agent/graph install --no-audit --no-fund
-          npm install -g @anthropic-ai/claude-code@${{ vars.CLAUDE_CODE_VERSION || 'latest' }}
+          set -euo pipefail
+          npm ci --no-audit --no-fund --prefer-offline &
+          A=$!
+          npm --prefix agent/graph ci --no-audit --no-fund --prefer-offline 2>/dev/null \
+            || npm --prefix agent/graph install --no-audit --no-fund --prefer-offline &
+          B=$!
+          npm install -g @anthropic-ai/claude-code@${{ vars.CLAUDE_CODE_VERSION || 'latest' }} &
+          C=$!
+          if [ "${PAG_UI_EVIDENCE:-0}" = "1" ]; then
+            (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg) &
+            D=$!
+          fi
+          for pid in $A $B $C ${D:-}; do wait "$pid"; done
 
-      - name: Browser + video tools for the evidence rung
+      - name: Playwright browser
         if: env.PAG_UI_EVIDENCE == '1'
         run: |
-          npx --prefix agent/graph playwright install --with-deps chromium
-          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
+            npx --prefix agent/graph playwright install-deps chromium
+          else
+            npx --prefix agent/graph playwright install --with-deps chromium
+          fi
+
+      # The agent's own deterministic parts: the secret scanner, the gate-output parser, the clock,
+      # the path guard, the evidence pairing, the profile contract. 48 assertions, under a second,
+      # and they run BEFORE a model is paid for — a broken parser used to be discovered by a run
+      # that spent $2 and then mis-blamed a patch for a pre-existing lint error.
+      - name: Agent self-tests
+        run: npm --prefix agent/graph test
 
       - name: AWS credentials for Bedrock
         uses: aws-actions/configure-aws-credentials@v4
@@ -144,7 +192,8 @@ jobs:
           [ -n "$RUN_DIR" ] && [ -d "$RUN_DIR" ] || { echo "no run folder (the agent failed before tracing)" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
           {
             echo "## $ISSUE_KEY"
-            echo "evidence: **${{ steps.agent.outputs.evidence || 'n/a' }}** · spent \$${{ steps.agent.outputs.spent || '0' }}"
+            echo "evidence: **${{ steps.agent.outputs.evidence || 'n/a' }}** · spent \$${{ steps.agent.outputs.spent || '0' }} · ${{ steps.agent.outputs.elapsed || '?' }}s of ${PAG_MAX_MINUTES}m"
+            [ "${{ steps.agent.outputs.incomplete }}" = "1" ] && echo "> **INCOMPLETE hand-over** — the gate was still red at the deadline. Do not merge as-is."
             [ -n "${{ steps.agent.outputs.pr_url }}" ] && echo "PR: ${{ steps.agent.outputs.pr_url }}"
             echo
             cat "$RUN_DIR/timeline.md" 2>/dev/null

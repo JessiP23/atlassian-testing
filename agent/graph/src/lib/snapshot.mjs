@@ -43,6 +43,30 @@ export function pinAgeHours() {
   return (Date.now() - new Date(p.refreshedAt).getTime()) / 3.6e6
 }
 
+// ---- the baseline, computed CONCURRENTLY with the early nodes --------------------------------
+//
+// Baselining the clean checkout is what stops a pre-existing lint error being blamed on the patch
+// (KAN-6). It is also a full lint + typecheck + test + build, which is 60-120s of the run's 20
+// minutes — spent before intake had even read the ticket, with nothing else happening.
+//
+// Nothing needs it until `verify`, and verify is six minutes downstream. So ci.mjs starts it as a
+// promise and registers it here; verify awaits `ready()` immediately before it consults the store.
+// On the runs measured so far the wait is zero: the baseline finished during `patch`.
+let pending = null
+
+export function setPending(promise) {
+  pending = Promise.resolve(promise).catch(() => null)
+  return pending
+}
+
+/** Block until the concurrent baseline has been written (no-op when there is none). */
+export async function ready() {
+  if (!pending) return false
+  await pending
+  pending = null
+  return true
+}
+
 // ---- per-project baselines -------------------------------------------------------------------
 
 const projFile = (project) => path.join(PROJ(), `${project.replace(/[^\w.@-]/g, '_')}.json`)

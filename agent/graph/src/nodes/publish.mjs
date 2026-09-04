@@ -17,6 +17,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { converseJson } from '../lib/bedrock.mjs'
 import { tierFor, estimateCost } from '../lib/models.mjs'
+import { addComment, transition } from '../lib/jira.mjs'
+import { formatFailures } from '../lib/gatelog.mjs'
+import { pairShots } from '../lib/evidence.mjs'
 
 const exec = promisify(execFile)
 const git = (repo, args) => exec('git', args, { cwd: repo, maxBuffer: 1 << 24 })
@@ -53,27 +56,18 @@ function evidenceBlock(s, budget, href = (f) => `evidence/${f}`) {
       '',
     )
     if (isE2e && (r.before?.shots?.length || e.after?.shots?.length)) {
-      // PAIR BY STATE NAME, not by index. The two runs do not produce the same number of frames:
-      // before the fix the flow breaks partway, after it completes. Index pairing then puts
-      // "01-initial-load" next to "03-reloaded" and the table lies. The name is the contract
-      // (witness/fixtures.mjs), so `02-after-toggle-dark` sits beside its own counterpart and a
-      // state the broken app never reached is shown as exactly that.
-      const key = (f) => String(f).replace(/^(before|after)-/, '').replace(/\.png$/, '')
-      const label = (k) => k.replace(/^\d+[-_]?/, '').replace(/[-_]+/g, ' ').trim() || k
-      const B = new Map((r.before?.shots || []).map((f) => [key(f), f]))
-      const A = new Map((e.after?.shots || []).map((f) => [key(f), f]))
-      const states = [...new Set([...B.keys(), ...A.keys()])].sort()
+      // PAIR BY STATE NAME, not by index — see lib/evidence.mjs for why, and test/evidence.test.mjs
+      // for the case that proves it (3 before-frames vs 8 after-frames must not shift the rows).
+      const { rows, missingBefore } = pairShots(r.before?.shots || [], e.after?.shots || [])
       lines.push(
         `| State | Before (\`${s.baseBranch}@${String(s.baseSha).slice(0, 7)}\`) | After this patch |`,
         '|---|---|---|',
       )
-      for (const k of states.slice(0, 8)) {
-        const b = B.get(k), a = A.get(k)
-        lines.push(`| **${label(k)}** | ${b ? `![before ${label(k)}](${href(b)})` : '_not reached before the fix_'} | ${a ? `![after ${label(k)}](${href(a)})` : '_not reached_'} |`)
+      for (const row of rows) {
+        lines.push(`| **${row.label}** | ${row.before ? `![before ${row.label}](${href(row.before)})` : '_not reached before the fix_'} | ${row.after ? `![after ${row.label}](${href(row.after)})` : '_not reached_'} |`)
       }
       lines.push('')
-      const missing = states.filter((k) => !B.has(k))
-      if (missing.length) lines.push(`The broken build never reached ${missing.length} of these states — that gap is part of the evidence.`, '')
+      if (missingBefore.length) lines.push(`The broken build never reached ${missingBefore.length} of these states — that gap is part of the evidence.`, '')
       if (e.after?.gif) lines.push(`![walkthrough after the fix](${href(e.after.gif)})`, '')
       const links = [
         r.before?.video && `[before.webm](${href(r.before.video)})`, e.after?.video && `[after.webm](${href(e.after.video)})`,
@@ -103,6 +97,19 @@ function evidenceBlock(s, budget, href = (f) => `evidence/${f}`) {
     '',
     `**Gate:** ${s.gate?.summary || '—'} · projects: ${(s.scope?.owners || []).join(', ') || '—'} · baseline \`${String(s.baseSha).slice(0, 7)}\``,
   )
+  // Anything the deadline dropped is stated here, in the evidence section, not buried in a log.
+  // A gate that skipped `build` proved less than a gate that ran it, and the reviewer decides what
+  // that is worth — the workflow does not get to quietly call it green.
+  if (s.gate?.skipped?.length) {
+    lines.push(
+      '',
+      `> ⚠ **${s.gate.skipped.join(', ')} was not run** — the run reached its ${budget?.maxMinutes || 20}-minute deadline first. `
+      + `Everything else above passed. CI on this PR runs the full gate.`,
+    )
+  }
+  if (s.repro?.shipped?.length) {
+    lines.push('', `The witness is in this diff as ${s.repro.shipped.map((f) => `\`${f}\``).join(' + ')}, so it is reviewable and re-runnable after merge.`)
+  }
   return lines.join('\n')
 }
 
@@ -155,6 +162,57 @@ function citationCheck(body, changed) {
   return bad
 }
 
+/**
+ * The branch already exists on the remote. Whose commits are on it?
+ *
+ * This decides between force-pushing over the agent's own earlier attempt (fine, and the whole
+ * point of a re-run) and destroying a human's work (never). It is the difference between "run the
+ * ticket again" being safe and being a data-loss bug.
+ */
+async function remoteBranchOwner({ repo, remote, branch, baseSha }) {
+  const { stdout: ls } = await git(repo, ['ls-remote', '--heads', remote, branch]).catch(() => ({ stdout: '' }))
+  if (!ls.trim()) return { exists: false, agentOnly: true, sha: null, authors: [] }
+  const sha = ls.trim().split(/\s+/)[0]
+  try {
+    await git(repo, ['fetch', '-q', '--depth', '50', remote, `refs/heads/${branch}`])
+    // Only the commits the BRANCH adds on top of the pinned base — the base branch's own history
+    // is authored by everyone and says nothing about who owns this branch.
+    const { stdout } = await git(repo, ['log', '--format=%ae', '-50', 'FETCH_HEAD', '--not', baseSha])
+    const authors = [...new Set(stdout.split('\n').map((x) => x.trim()).filter(Boolean))]
+    const isAgent = (e) => /panda-agent|\[bot\]|users\.noreply\.github\.com/.test(e)
+    return { exists: true, agentOnly: authors.length > 0 && authors.every(isAgent), sha, authors }
+  } catch {
+    // Cannot tell: assume a human is on it. Costs one extra branch; the alternative costs their work.
+    return { exists: true, agentOnly: false, sha, authors: ['unknown'] }
+  }
+}
+
+/**
+ * Open the PR, or update the one that is already open for this branch.
+ *
+ * `gh pr create` used to be called unconditionally. A second dispatch of the same ticket — a Jira
+ * automation firing twice, a re-run after a flake, a human clicking the workflow button — got as
+ * far as writing the fix, pushing the branch, and then died on `a pull request for branch ... already
+ * exists`. The whole run was paid for and lost at the last step. Re-running a ticket has to be the
+ * cheapest thing in the system, not the most dangerous.
+ */
+async function createOrUpdatePr({ repo, allowed, branch, base, title, body, draft = true, onProgress = () => {} }) {
+  const { stdout: found } = await exec('gh', [
+    'pr', 'list', '--repo', allowed, '--head', branch, '--state', 'open', '--json', 'number,url', '--limit', '1',
+  ], { cwd: repo }).catch(() => ({ stdout: '[]' }))
+  const open = (() => { try { return JSON.parse(found)[0] } catch { return null } })()
+
+  if (open?.number) {
+    onProgress(`PR #${open.number} is already open for ${branch} — updating it in place`)
+    await exec('gh', ['pr', 'edit', String(open.number), '--repo', allowed, '--title', title, '--body', body], { cwd: repo })
+    return { url: open.url, updated: true }
+  }
+  const args = ['pr', 'create', '--repo', allowed, '--base', base, '--head', branch, '--title', title, '--body', body]
+  if (draft) args.push('--draft')
+  const { stdout: url } = await exec('gh', args, { cwd: repo })
+  return { url: url.trim(), updated: false }
+}
+
 export function publishNode({ budget, dryRun = false }) {
   return async (s) => {
     const tier = tierFor('package')
@@ -177,9 +235,12 @@ export function publishNode({ budget, dryRun = false }) {
 
     const pr = data
     const AGENT = process.env.PAG_AGENT_NAME || 'panda-agent'
+    const inc = s.incomplete || null
 
-    // Identifiable in a PR list without opening it, and greppable for reporting later.
-    pr.title = `[${AGENT}] ${String(pr.title).replace(new RegExp(`^\\[${AGENT}\\]\\s*`), '')}`.slice(0, 100)
+    // Identifiable in a PR list without opening it, and greppable for reporting later. An
+    // incomplete hand-over says so in the title, because that is the only part of a PR that shows
+    // up in a notification, a list and a Slack unfurl.
+    pr.title = `[${AGENT}]${inc ? '[INCOMPLETE]' : ''} ${String(pr.title).replace(new RegExp(`^\\[${AGENT}\\](?:\\[INCOMPLETE\\])?\\s*`), '')}`.slice(0, 100)
 
     // Body: what changed (files, with the diffstat) before the prose. A reviewer's first question
     // is always "how big is this", and the answer should not be three paragraphs down.
@@ -189,7 +250,27 @@ export function publishNode({ budget, dryRun = false }) {
     const banner = evidenceLabel === 'evidence:e2e' ? 'Evidence: witnessed in the running app — screenshots red → green'
       : evidenceLabel === 'evidence:repro' ? 'Evidence: reproducing test red → green'
       : 'Evidence: none — review against the acceptance criteria'
+
+    // The hand-over block. A run that reached its deadline with the gate still red used to refuse:
+    // the branch was deleted, the diff survived only as a workflow artifact, and the ticket got a
+    // log tail. That threw away the expensive part — the diagnosis and the code — at the one moment
+    // it was finally worth something. So the work is published as an explicitly INCOMPLETE draft
+    // with the failure at the top. A human decides whether to finish it or bin it; the workflow's
+    // job is to hand them something to decide about.
+    const handover = inc ? [
+      '> [!WARNING]',
+      `> **This is an unfinished hand-over, not a proposed fix.** ${inc.reason}`,
+      '>',
+      `> The gate is still red: ${s.gate?.summary || 'unknown'}`,
+      '>',
+      `> Nothing here is merge-ready. What it gives you is the branch, the diff, and the evidence`,
+      `> below, so the ${(budget.elapsedMs() / 60_000).toFixed(0)} minutes and $${budget.report().spent.toFixed(2)} already spent on the diagnosis are not lost.`,
+      (s.gate?.failures || []).length ? `>\n> Remaining failures:\n>\n${formatFailures(s.gate.failures).split('\n').map((l) => `> ${l}`).join('\n')}` : '',
+      '',
+    ].filter(Boolean).join('\n') : ''
+
     const body = (href) => [
+      handover,
       `> **${banner}**`,
       '',
       pr.body,
@@ -208,6 +289,7 @@ export function publishNode({ budget, dryRun = false }) {
     ].join('\n')
     pr.body = body()
     pr.evidenceLabel = evidenceLabel
+    pr.labels = [evidenceLabel, ...(inc ? ['agent:incomplete'] : [])]
 
     if (dryRun) {
       // Same file the live path would upload as the PR body, so a dry run can be read like a PR.
@@ -270,8 +352,28 @@ export function publishNode({ budget, dryRun = false }) {
     // Not from origin/<base>: the run's changes were made on top of the pinned commit, and
     // re-pointing the branch at a newer HEAD here would silently rebase them onto code the gate
     // never tested. The PR is then a few hours behind main, which GitHub merges fine.
-    await git(s.repo, ['branch', '-f', s.branchName, s.baseSha]).catch(() => {})
-    await git(s.repo, ['symbolic-ref', 'HEAD', `refs/heads/${s.branchName}`])
+    //
+    // RE-RUN SAFETY. The same ticket can be dispatched twice — a Jira automation firing on two
+    // transitions, a human pressing the workflow button, a retry after a flake. Three cases, and
+    // only the third is dangerous:
+    //   nothing on the remote      -> push, open the PR
+    //   only the agent's commits   -> force-push over its own earlier attempt, update the open PR
+    //   a human commit is on it    -> DO NOT touch it. Push a suffixed branch and open a second PR.
+    const pushRemote = process.env.PAG_PUSH_REMOTE || 'origin'
+    const owner = await remoteBranchOwner({ repo: s.repo, remote: pushRemote, branch: s.branchName, baseSha: s.baseSha })
+    let branch = s.branchName
+    let supersedes = ''
+    if (owner.exists && !owner.agentOnly) {
+      let n = 2
+      while (n < 20 && (await remoteBranchOwner({ repo: s.repo, remote: pushRemote, branch: `${s.branchName}-r${n}`, baseSha: s.baseSha })).exists) n++
+      branch = `${s.branchName}-r${n}`
+      supersedes = `\n\n> \`${s.branchName}\` already carries commits by ${owner.authors.join(', ')}, so this run did NOT touch it. `
+        + `Its work is on \`${branch}\` instead.`
+      console.error(`branch ${s.branchName} has non-agent commits (${owner.authors.join(', ')}) — using ${branch}`)
+    }
+
+    await git(s.repo, ['branch', '-f', branch, s.baseSha]).catch(() => {})
+    await git(s.repo, ['symbolic-ref', 'HEAD', `refs/heads/${branch}`])
     await git(s.repo, ['reset', '--soft', s.baseSha])
 
     // ---- explicit paths only ------------------------------------------------------------------
@@ -279,50 +381,89 @@ export function publishNode({ budget, dryRun = false }) {
 
     const rep = budget.report()
     const mins = Math.floor((rep.elapsedMs || 0) / 60_000), secs = Math.round(((rep.elapsedMs || 0) % 60_000) / 1000)
+    const phases = (rep.phases || []).map((p) => `${p.node} ${(p.ms / 1000).toFixed(0)}s`).join(' · ')
     const footer = [
       '',
       '---',
       `**Ticket** ${process.env.JIRA_URL || ''}/browse/${s.issueKey}`,
       `**Base** \`${s.baseBranch}@${String(s.baseSha).slice(0, 7)}\` — the commit the gate tested against`,
-      `**Gate** ${s.gate.summary}`,
+      `**Gate** ${s.gate?.summary || '—'}`,
       `**Verified projects** ${(s.scope?.owners || []).join(', ') || '—'}`,
       `**Spend** $${rep.spent.toFixed(2)} · **Wall time** ${mins}m ${secs}s of ${rep.maxMinutes} min`,
+      phases ? `**Phases** ${phases}` : '',
+      supersedes,
       '',
-      `🐼 Opened by \`${AGENT}\` on branch \`${s.branchName}\`. **Draft by design — this agent cannot merge.**`,
+      `🐼 Opened by \`${AGENT}\` on branch \`${branch}\`. **Draft by design — this agent cannot merge.**`,
       'Its token carries `pull_requests:write` and `contents:write` and nothing else.',
-    ].join('\n')
+    ].filter(Boolean).join('\n')
 
-    await git(s.repo, [
-      'commit', '-q',
-      '-m', pr.title,
-      '-m', `${pr.body}\n\n## Tests\n${pr.testNotes}\n\n## Rollout\n${pr.rolloutNotes}${footer}`,
-    ])
-    const pushRemote = process.env.PAG_PUSH_REMOTE || 'origin'
-    await git(s.repo, ['push', pushRemote, `HEAD:refs/heads/${s.branchName}`])
+    const fullBody = `${pr.body}\n\n## Tests\n${pr.testNotes}\n\n## Rollout\n${pr.rolloutNotes}${footer}`
 
-    // ---- draft PR. The token carries pull_requests:write and contents:write, nothing else. ----
+    await git(s.repo, ['commit', '-q', '-m', pr.title, '-m', fullBody])
+    // force is safe here and only here: `owner.agentOnly` was checked above, so the only history
+    // being overwritten is this agent's own previous attempt at the same ticket.
+    await git(s.repo, ['push', ...(owner.exists && owner.agentOnly ? ['--force'] : []), pushRemote, `HEAD:refs/heads/${branch}`])
+
+    // ---- draft PR, created or updated ---------------------------------------------------------
+    // The token carries pull_requests:write and contents:write, nothing else.
     // `gh` infers the repo from the remote and gets it wrong in a worktree — name it explicitly.
-    const { stdout: url } = await exec('gh', [
-      'pr', 'create',
-      '--repo', allowed,
-      '--draft',
-      '--base', s.prTargetBranch,
-      '--head', s.branchName,
-      '--title', pr.title,
-      '--body', `${pr.body}\n\n## Tests\n${pr.testNotes}\n\n## Rollout\n${pr.rolloutNotes}${footer}`,
-    ], { cwd: s.repo })
+    const { url: prUrl, updated } = await createOrUpdatePr({
+      repo: s.repo, allowed, branch, base: s.prTargetBranch,
+      title: pr.title, body: fullBody, draft: true,
+      onProgress: (l) => console.error(l),
+    })
 
     // Labels are best-effort: a fine-grained token without issues:write cannot create them, and a
     // missing label must never fail a PR that is already open. The body's first line carries the
     // same information regardless.
-    const prUrl = url.trim()
     try {
-      const desc = { 'evidence:e2e': 'witnessed in the running app: screenshots red before, green after', 'evidence:repro': 'reproducing test: red before, green after', 'evidence:none': 'no reproducing test — review against acceptance criteria' }
-      await exec('gh', ['label', 'create', pr.evidenceLabel, '--repo', allowed, '--force', '--color',
-        pr.evidenceLabel === 'evidence:none' ? 'A03A32' : '2E6B4F', '--description', desc[pr.evidenceLabel]], { cwd: s.repo })
-      await exec('gh', ['pr', 'edit', prUrl, '--repo', allowed, '--add-label', pr.evidenceLabel], { cwd: s.repo })
-    } catch { /* label is a convenience */ }
+      const desc = {
+        'evidence:e2e': 'witnessed in the running app: screenshots red before, green after',
+        'evidence:repro': 'reproducing test: red before, green after',
+        'evidence:none': 'no reproducing test — review against acceptance criteria',
+        'agent:incomplete': 'the agent ran out of clock with the gate red — hand-over, not a fix',
+      }
+      for (const label of pr.labels) {
+        await exec('gh', ['label', 'create', label, '--repo', allowed, '--force', '--color',
+          label === 'evidence:none' ? 'A03A32' : label === 'agent:incomplete' ? '8A6A12' : '2E6B4F',
+          '--description', desc[label] || label], { cwd: s.repo })
+      }
+      await exec('gh', ['pr', 'edit', prUrl, '--repo', allowed, '--add-label', pr.labels.join(',')], { cwd: s.repo })
+    } catch { /* labels are a convenience */ }
 
-    return { pr, prUrl }
+    // ---- write back to Jira -------------------------------------------------------------------
+    // The gap this closes: `addComment` was only ever called on the REFUSE path. A successful run
+    // left no trace on the ticket at all, so the person who filed it had no way to know a PR
+    // existed unless they were watching the repo. Half of what makes this feel like a teammate is
+    // that it answers where it was asked.
+    if (process.env.PAG_JIRA_COMMENT !== '0') {
+      const evidenceLine = {
+        'evidence:e2e': 'Screenshots of the broken and fixed states are in the PR, paired state by state.',
+        'evidence:repro': 'A reproducing test was written before the fix, red on the base commit and green after it.',
+        'evidence:none': 'No reproducing test — please review the diff against the acceptance criteria.',
+      }[evidenceLabel]
+      const lines = inc ? [
+        `${AGENT} could not finish this one inside its ${rep.maxMinutes}-minute budget, and has handed over what it has.`,
+        '', `**Draft PR (INCOMPLETE — do not merge as-is):** ${prUrl}`, '',
+        `Gate: ${s.gate?.summary || 'red'}`,
+        `Spent $${rep.spent.toFixed(2)} in ${mins}m ${secs}s. The diff, the evidence and the remaining failures are in the PR.`,
+      ] : [
+        `${AGENT} opened a **draft** PR for this ticket.`,
+        '', `**${prUrl}**${updated ? ' _(updated — a run for this ticket had already opened it)_' : ''}`, '',
+        evidenceLine,
+        `Gate: ${s.gate?.summary || '—'}`,
+        s.gate?.skipped?.length ? `Not run for the clock: ${s.gate.skipped.join(', ')} — CI on the PR covers it.` : '',
+        `Files: ${(s.changed || []).map((f) => `\`${f}\``).join(', ')}`,
+        `Spent $${rep.spent.toFixed(2)} in ${mins}m ${secs}s. **A human reviews and merges — the agent cannot.**`,
+      ].filter(Boolean)
+      await addComment(s.issueKey, lines.join('\n')).catch((e) => console.error(`jira comment failed: ${e.message}`))
+
+      // Moving the ticket is opt-in: on a team board the transition names differ per project and a
+      // wrong one is noisy. Set PAG_JIRA_TRANSITION="In Review" once you know yours.
+      const wanted = process.env.PAG_JIRA_TRANSITION
+      if (wanted && !inc) await transition(s.issueKey, wanted).catch((e) => console.error(`jira transition failed: ${e.message}`))
+    }
+
+    return { pr, prUrl, branchName: branch }
   }
 }

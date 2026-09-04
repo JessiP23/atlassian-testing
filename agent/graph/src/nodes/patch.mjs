@@ -115,7 +115,13 @@ export function patchNode({ budget, onProgress = () => {} }) {
 
     const plannedTests = (s.plan.newTests || []).map((t) => t.file).filter(Boolean)
     // The frozen reproducing test ships in the PR, so it is in scope — but read-only (verify hashes it).
+    // The frozen reproducing test, and — for the witness rung on a repo that can actually run
+    // Playwright — the spec and fixtures reproduce COMMITTED into the repo so the reviewer gets the
+    // test as code, not only as a screenshot. Both are read-only to this node (verify checks the
+    // spec's hash), but both must be inside the allowlist or the guard reports the evidence itself
+    // as scope creep.
     if (s.repro?.status === 'red' && s.repro.file) plannedTests.push(s.repro.file)
+    for (const f of s.repro?.shipped || []) plannedTests.push(f)
 
     const timeMs = budget.timeFor('patch')
     if (timeMs < 2 * 60_000) {

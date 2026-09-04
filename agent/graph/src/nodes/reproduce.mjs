@@ -28,18 +28,20 @@ import path from 'node:path'
 import { tierFor } from '../lib/models.mjs'
 import { runClaude } from '../lib/agent.mjs'
 import { reproPathFor, reproCommand, runSpec, sha256, saveEvidence, excerpt,
-  witnessSpecPath, witnessCommand, runWitness, collectWitness, WITNESS_FIXTURES } from '../lib/repro.mjs'
+  witnessSpecPath, witnessCommand, runWitness, collectWitness, shipWitness, WITNESS_FIXTURES } from '../lib/repro.mjs'
 import { ensureApp } from '../lib/app.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
 
 const exec = promisify(execFile)
 const ATTEMPTS = Number(process.env.PAG_REPRO_ATTEMPTS || 2)
 const REPRO_BUDGET = Number(process.env.PAG_REPRO_BUDGET || 1.5)
-// Its own wall-clock ceiling, separate from the run's. On KAN-6 the witness iterated for 566s of a
-// 1200s budget (oklch colours, then per-assertion timeouts) and left repair 149s, which is not
-// enough to fix anything. Writing the test is worth minutes; it is not worth the whole run.
-const REPRO_MS = Number(process.env.PAG_REPRO_MINUTES || 7) * 60_000
-const capped = (ms) => Math.min(ms, REPRO_MS)
+// This phase's clock is now ONE number owned by lib/budget.mjs (PHASES.reproduce), not a second
+// ceiling maintained here. On KAN-6 the witness iterated for 566s of a 1200s run (oklch colours,
+// then per-assertion timeouts) and left repair 149s, which is not enough to fix anything.
+// budget.timeFor('reproduce') is min(its own ceiling, what is left after patch/verify/publish are
+// reserved), so it can never eat the deliverable — and the two attempts share it rather than each
+// getting the whole thing.
+const attemptShare = (budget, attempt) => Math.floor(budget.timeFor('reproduce') / (ATTEMPTS - attempt + 1))
 
 const UI_EVIDENCE = process.env.PAG_UI_EVIDENCE === '1'
 
@@ -191,7 +193,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
     let previous = ''
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
       const allowance = Math.min(REPRO_BUDGET, budget.availableFor('repro'))
-      const timeMs = capped(budget.timeFor('repro'))
+      const timeMs = attemptShare(budget, attempt)
       if (allowance < 0.3 || timeMs < 60_000) {
         return { repro: { status: 'none', reason: `skipped: $${allowance.toFixed(2)} / ${(timeMs / 1000).toFixed(0)}s left`, rung } }
       }
@@ -267,7 +269,7 @@ async function witness(s, { budget, onProgress, appUrl }) {
   let previous = ''
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     const allowance = Math.min(REPRO_BUDGET, budget.availableFor('repro'))
-    const timeMs = capped(budget.timeFor('repro'))
+    const timeMs = attemptShare(budget, attempt)
     if (allowance < 0.3 || timeMs < 90_000) return null
 
     onProgress(`witness attempt ${attempt}/${ATTEMPTS} -> ${specFile}`)
@@ -311,9 +313,16 @@ async function witness(s, { budget, onProgress, appUrl }) {
     const before = await collectWitness(red.outDir, 'before')
     saveEvidence('repro-red.log', red.out)
     onProgress(`witness RED against ${appUrl}: ${before.shots.length} screenshot(s), video ${before.video ? 'yes' : 'no'}`)
+
+    // Put the spec in the repo when the repo can run it, so the reviewer gets the reproducing test
+    // as reviewable, re-runnable code and not only as a picture. Before patch, so the gate covers
+    // it. A repo without @playwright/test returns [] and nothing is added to the diff.
+    const shipped = shipWitness(s.repo, specFile, s.issueKey)
+    if (shipped.length) onProgress(`witness committed to the diff: ${shipped.join(', ')}`)
+
     return {
       repro: {
-        status: 'red', rung: 'e2e', file: specFile, sha: sha256(s.repo, specFile), cmd,
+        status: 'red', rung: 'e2e', file: specFile, sha: sha256(s.repo, specFile), cmd, shipped,
         redExcerpt: excerpt(red.out), attempts: attempt, appUrl,
         before: { shots: before.shots.map((f) => path.basename(f)), video: before.video && path.basename(before.video), gif: before.gif && path.basename(before.gif), trace: before.trace && path.basename(before.trace) },
       },

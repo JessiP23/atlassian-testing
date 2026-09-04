@@ -167,3 +167,48 @@ export async function makeGif(webm, gif) {
     return gif
   } catch { return null }
 }
+
+/**
+ * Commit the witness so the reviewer gets the reproducing test AS CODE, not only as a screenshot.
+ *
+ * The gap this closes: the witness spec lived only in the run folder and in a `<details>` block of
+ * the PR body, so the one artefact the whole evidence claim rests on was not in the diff anybody
+ * reviewed, and nobody could re-run it after the branch merged.
+ *
+ * Two constraints make this conditional rather than automatic:
+ *
+ *   1. It only happens when `profile.e2eDir(repo)` is non-null — i.e. when the repo already has
+ *      `@playwright/test`. Dropping a spec plus a config into a repo that cannot run them hands the
+ *      reviewer a file that fails on their next push. That is worse than no file.
+ *   2. It happens in `reproduce`, BEFORE patch and therefore before the gate, so the committed
+ *      files are linted and typechecked like any other code in the diff. Adding them at publish
+ *      time would ship unverified files straight into a PR.
+ *
+ * The fixtures are copied beside the spec and the import is rewritten, so the committed spec is
+ * self-contained and runnable with the command the PR prints.
+ *
+ * @returns {string[]} repo-relative paths written, or [] when this repo cannot host them
+ */
+export function shipWitness(repo, specFile, issueKey) {
+  const dir = loadProfile(repo).e2eDir(repo)
+  if (!dir || !specFile || !fs.existsSync(specFile)) return []
+  try {
+    const abs = path.join(repo, dir)
+    fs.mkdirSync(abs, { recursive: true })
+    const written = []
+
+    const fixtures = `pag-fixtures.mjs`
+    fs.copyFileSync(WITNESS_FIXTURES, path.join(abs, fixtures))
+    written.push(path.posix.join(dir, fixtures))
+
+    const specName = `${issueKey}.pag.spec.mjs`
+    const src = fs.readFileSync(specFile, 'utf8')
+      // The generated spec imports the fixtures by absolute path (it runs from the agent's own
+      // directory). Inside the repo that path does not exist on anyone else's machine.
+      .replace(/from\s+['"][^'"]*witness\/fixtures\.mjs['"]/g, `from './${fixtures}'`)
+    fs.writeFileSync(path.join(abs, specName), src)
+    written.push(path.posix.join(dir, specName))
+
+    return written
+  } catch { return [] }
+}

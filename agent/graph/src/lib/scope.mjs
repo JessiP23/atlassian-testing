@@ -19,9 +19,14 @@ export async function scopeFor(repo, changed) {
   return { owners, typeConsumers, plan, profile: profile.name }
 }
 
-/** The plan already carries its argv — this keeps the call site in verify.mjs unchanged. */
+/**
+ * The plan already carries its argv — this keeps the call site in verify.mjs unchanged.
+ * `exclusive` (must run alone: it writes a build dir the dev server is using) and `optional`
+ * (the deadline may drop it) travel with it, because verify schedules on them.
+ */
 export function commandsFor(plan) {
-  return plan.map(({ target, projects, argv }) => ({ target, projects, argv }))
+  return plan.map(({ target, projects, argv, exclusive = false, optional = false }) =>
+    ({ target, projects, argv, exclusive, optional }))
 }
 
 /** Still used by the context pack and by repro path resolution. */

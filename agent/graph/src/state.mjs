@@ -54,6 +54,15 @@ export const S = Annotation.Root({
   pr: last(),                // { title, body, testNotes, rolloutNotes }
   prUrl: last(),
 
+  // ---- hand-over ----------------------------------------------------------------------------
+  // Set by the `handover` node when the run reaches its deadline (or its repair limit) with the
+  // gate still red. It does NOT mean failure: publish turns it into an explicitly INCOMPLETE draft
+  // PR carrying the diff, the evidence and the remaining failures, because a human with a branch
+  // to finish is worth more than a Jira comment with a log tail. See lib/budget.mjs.
+  incomplete: last(),        // { reason, at }
+  outOfTime: last(),         // repair setting this means "not enough clock to try", not "failed"
+  secrets: last(),           // findings from lib/secrets.mjs when the diff carried a credential
+
   // ---- control ------------------------------------------------------------------------------
   // Terminal reason when the graph refuses. A refusal is a SUCCESSFUL outcome of the workflow:
   // Cody's triage prompt had no refusal path at all ("No human will answer; you'll make a

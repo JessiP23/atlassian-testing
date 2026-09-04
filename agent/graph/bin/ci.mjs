@@ -30,7 +30,7 @@ import * as snap from '../src/lib/snapshot.mjs'
 import { parseFailures, parseFailedTasks } from '../src/lib/baseline.mjs'
 import { Trace } from '../src/lib/trace.mjs'
 import { loadProfile } from '../profiles/index.mjs'
-import { stopApp } from '../src/lib/app.mjs'
+import { stopApp, warmApp } from '../src/lib/app.mjs'
 
 const exec = promisify(execFile)
 const argv = process.argv.slice(2)
@@ -74,49 +74,66 @@ if (!has('skip-index')) {
   console.log(`  index: ${n} file(s) in ${((Date.now() - t0) / 1000).toFixed(0)}s`)
 }
 
-// ---- 2. baseline the gate on the CLEAN checkout ----------------------------------------------
+// ---- 2. baseline the gate on the CLEAN checkout — CONCURRENTLY ------------------------------
 //
-// Without this, every failure the gate sees is attributed to the patch. On KAN-6 the only lint
-// error in the repo was in the agent's own vendored source — `npm run lint` covers the whole repo —
-// so a correct patch was blamed for it, repair spent its budget trying to fix code it had not
+// Without a baseline, every failure the gate sees is attributed to the patch. On KAN-6 the only
+// lint error in the repo was in the agent's own vendored source — `npm run lint` covers the whole
+// repo — so a correct patch was blamed for it, repair spent its budget fixing code it had not
 // touched, and the run died on the clock. Recording what already fails, before anything is edited,
 // is the difference between "N failures" and "N NEW failures".
 //
+// WHY IT NO LONGER BLOCKS: this is a full lint + typecheck + test + build of the clean checkout,
+// 60-120s, and it used to run to completion before intake had read the ticket. Nothing needs its
+// answer until `verify`, which is six minutes downstream. So it starts here as a promise and
+// `snap.ready()` is awaited inside verify, immediately before the store is consulted. On every run
+// measured so far that wait is zero — the baseline finishes during `patch`.
+//
 // Only for profiles where the whole gate is cheap (nextjs: under a minute). On an nx monorepo this
 // is the refresher's job, per merge, for the projects a merge actually affected.
+const baselineProjects = [...new Set(profile.gate(repo, { owners: ['app'], typeConsumers: [] }).flatMap((x) => x.projects))]
 let baselined = 0
+
 if (profile.baselineAll && !has('skip-baseline')) {
-  const { execFile } = await import('node:child_process')
+  baselined = baselineProjects.length
   const run = (argv) => new Promise((resolve) => {
-    execFile('npx', argv, { cwd: repo, maxBuffer: 1 << 26, timeout: 8 * 60_000 }, (err, stdout, stderr) => {
+    const bin = argv[0] === 'npm' || argv[0] === 'npx' ? argv[0] : 'npx'
+    const rest = argv[0] === 'npm' || argv[0] === 'npx' ? argv.slice(1) : argv
+    execFile(bin, rest, { cwd: repo, maxBuffer: 1 << 26, timeout: 8 * 60_000 }, (err, stdout, stderr) => {
       resolve({ ok: !err, out: `${stdout || ''}${stderr || ''}` })
     })
   })
 
-  const plan = profile.gate(repo, { owners: ['app'], typeConsumers: [] })
-  const failingTargets = new Set()
-  const failingTests = new Set()
-  const t1 = Date.now()
-  for (const { target, projects, argv } of plan) {
-    const { ok, out } = await run(argv)
-    if (ok) continue
-    for (const p of projects) failingTargets.add(`${p}:${target}`)
-    if (target === 'test') {
-      for (const id of parseFailures(out)) failingTests.add(id)
-      for (const id of parseFailedTasks(out)) failingTargets.add(id)
+  snap.setPending((async () => {
+    const plan = profile.gate(repo, { owners: ['app'], typeConsumers: [] })
+    const failingTargets = new Set()
+    const failingTests = new Set()
+    const t1 = Date.now()
+    // Same split as the gate itself: the read-only targets together, the exclusive ones alone.
+    // This is the clean checkout, so nothing else is using the build directory yet.
+    const results = [
+      ...await Promise.all(plan.filter((c) => !c.exclusive).map(async (c) => ({ ...c, ...(await run(c.argv)) }))),
+    ]
+    for (const c of plan.filter((c) => c.exclusive)) results.push({ ...c, ...(await run(c.argv)) })
+    for (const { target, projects, ok, out } of results) {
+      if (ok) continue
+      for (const p of projects) failingTargets.add(`${p}:${target}`)
+      if (target === 'test') {
+        for (const id of parseFailures(out)) failingTests.add(id)
+        for (const id of parseFailedTasks(out)) failingTargets.add(id)
+      }
     }
-  }
-  for (const p of [...new Set(plan.flatMap((x) => x.projects))]) {
-    snap.writeProject(p, {
-      sha: baseSha,
-      failed: [...failingTargets].some((id) => id.startsWith(`${p}:`)),
-      tasks: [...failingTargets].filter((id) => id.startsWith(`${p}:`)),
-      tests: [...failingTests],
-    })
-    baselined++
-  }
-  console.log(`  baseline: ${baselined} project(s) in ${((Date.now() - t1) / 1000).toFixed(0)}s`
-    + (failingTargets.size ? ` — already failing on ${baseSha.slice(0, 7)}: ${[...failingTargets].join(', ')}` : ' — all green'))
+    for (const p of baselineProjects) {
+      snap.writeProject(p, {
+        sha: baseSha,
+        failed: [...failingTargets].some((id) => id.startsWith(`${p}:`)),
+        tasks: [...failingTargets].filter((id) => id.startsWith(`${p}:`)),
+        tests: [...failingTests],
+      })
+    }
+    console.log(`  baseline: ${baselineProjects.length} project(s) in ${((Date.now() - t1) / 1000).toFixed(0)}s (concurrent)`
+      + (failingTargets.size ? ` — already failing on ${baseSha.slice(0, 7)}: ${[...failingTargets].join(', ')}` : ' — all green'))
+  })())
+  console.log(`  baseline: started in the background for ${baselineProjects.join(', ')}`)
 }
 
 // ---- 3. pin at HEAD --------------------------------------------------------------------------
@@ -132,7 +149,8 @@ const slug = String(flag('slug', '')) || 'fix'
 console.log('')
 console.log(`  ${issueKey}   ${profile.name} profile   ${repo}`)
 console.log(`  base ${baseBranch}@${baseSha.slice(0, 7)}  ->  PR into ${prTargetBranch}${dryRun ? '   [DRY RUN]' : ''}`)
-console.log(`  cap $${budget.capUsd} (reserve $${budget.reserveUsd}) · wall-clock target ${budget.maxMinutes} min`)
+console.log(`  cap $${budget.capUsd} (reserve $${budget.reserveUsd}) · hard deadline ${budget.maxMinutes} min`)
+console.log(`  clock: repro ${(budget.timeFor('reproduce') / 1000).toFixed(0)}s · patch ${(budget.timeFor('patch') / 1000).toFixed(0)}s · verify ${(budget.timeFor('verify') / 1000).toFixed(0)}s, and publish is always reserved`)
 console.log(`  models: fast=${TIERS.fast.model}  heavy=${TIERS.heavy.model}`)
 console.log(`  witness: ${process.env.PAG_UI_EVIDENCE === '1' ? (process.env.PAG_APP_EMAIL ? 'on (with app login)' : 'on (unauthenticated pages only)') : 'off'}`)
 console.log('')
@@ -155,6 +173,16 @@ const onProgress = (line) => {
     return
   }
   console.log(`      ${s}`)
+}
+
+// Boot the app NOW, not when the witness asks for it. `next dev` takes 10-40s to open its port
+// and compile the first route, and that used to be dead clock inside the reproduce phase. Starting
+// it here means it warms while intake, locate and planning are round-tripping to Bedrock, and the
+// witness finds a server already answering. lib/app.mjs shares the one in-flight boot, so this
+// never races a second server onto the port.
+if (process.env.PAG_UI_EVIDENCE === '1') {
+  warmApp({ repo, onProgress: (l) => console.log(`      ${l}`) })
+  console.log(`  app: warming ${process.env.PAG_APP_URL || 'the dev server'} in the background`)
 }
 
 const graph = buildGraph({ budget, checkpointer: new MemorySaver(), trace, dryRun, onProgress })
@@ -195,7 +223,9 @@ const led = budget.report()
 console.log('')
 console.log(`  spent $${led.spent.toFixed(4)} of $${led.capUsd} in ${((Date.now() - t0) / 1000).toFixed(0)}s`)
 console.log(`  by node: ${Object.entries(led.byNode).map(([n, v]) => `${n} $${v.toFixed(3)}`).join('  ')}`)
-if (final?.prUrl) console.log(`\n  DRAFT PR: ${final.prUrl}\n`)
+console.log(`  phases:  ${(led.phases || []).map((p) => `${p.node} ${(p.ms / 1000).toFixed(0)}s`).join('  ')}`)
+if (led.elapsedMs > led.maxMinutes * 60_000) console.log(`  ⚠ OVER the ${led.maxMinutes}-minute deadline by ${((led.elapsedMs - led.maxMinutes * 60_000) / 1000).toFixed(0)}s — check which phase overran above`)
+if (final?.prUrl) console.log(`\n  ${final?.incomplete ? 'INCOMPLETE HAND-OVER' : 'DRAFT PR'}: ${final.prUrl}\n`)
 else if (final?.refusal) console.log(`\n  refused at ${final.refusal.at}: ${final.refusal.reason}\n`)
 
 // Hand the run folder to the workflow, which turns it into the job summary and an artifact.
@@ -204,6 +234,9 @@ if (process.env.GITHUB_OUTPUT) {
     `run_dir=${path.relative(process.cwd(), trace.dir)}`,
     `pr_url=${final?.prUrl || ''}`,
     `refusal=${final?.refusal?.reason || ''}`,
+    `incomplete=${final?.incomplete ? '1' : ''}`,
+    `branch=${final?.branchName || ''}`,
+    `elapsed=${Math.round((led.elapsedMs || 0) / 1000)}`,
     `evidence=${final?.repro?.status === 'red' && final?.evidence?.reproGreen ? (final.repro.rung === 'e2e' ? 'e2e' : 'repro') : 'none'}`,
     `spent=${led.spent.toFixed(4)}`,
   ].join('\n') + '\n')

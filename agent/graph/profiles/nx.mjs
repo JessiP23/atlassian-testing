@@ -11,6 +11,9 @@ const exec = promisify(execFile)
 const TYPE_SURFACE = /(\.graphql|\.d\.ts|\/types\.ts|\/index\.ts)$/
 
 export default {
+  // See profiles/nextjs.mjs. Pioneer has Playwright, so a witness spec ships as reviewable code.
+  e2eDir: (repo) => 'e2e',
+
   name: 'nx',
 
   isUi: (p) => /^packages\/clients\/web-app\//.test(p),
@@ -59,7 +62,7 @@ export default {
     return [
       { target: 'lint', projects: owners, argv: argvFor('lint', owners) },
       { target: 'test', projects: owners, argv: argvFor('test', owners) },                        // NEVER the closure
-      { target: 'build', projects: [...owners, ...typeConsumers], argv: argvFor('build', [...owners, ...typeConsumers]) },
+      { target: 'build', projects: [...owners, ...typeConsumers], argv: argvFor('build', [...owners, ...typeConsumers]) , exclusive: true, optional: true },
     ].filter((s) => s.projects.length)
   },
 

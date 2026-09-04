@@ -15,6 +15,12 @@ const START_TIMEOUT_MS = Number(process.env.PAG_APP_START_TIMEOUT_MS || 4 * 60_0
 
 let child = null
 let started = false
+// ONE in-flight start, shared. `next dev` takes 10-40s to open its port and compile the first
+// route, and that used to happen inside the reproduce node while the clock was already running.
+// ci.mjs now calls warmApp() the moment the run begins, so the server boots WHILE intake, locate
+// and planning are talking to Bedrock; by the time the witness needs it, it is already answering.
+// Every later ensureApp() awaits this same promise instead of racing a second server onto the port.
+let booting = null
 
 // Readiness in two steps, because one HTTP probe is wrong for a dev server. `next dev` and
 // `vite` open the port immediately and compile the route on the FIRST request — which can take
@@ -42,8 +48,26 @@ async function warm(url, timeoutMs) {
   } catch { return false }
 }
 
+/**
+ * Start the app in the background and return immediately. Call once, early. The returned promise
+ * is what ensureApp() awaits, so calling both never starts two servers.
+ */
+export function warmApp({ repo, onProgress = () => {} }) {
+  if (!booting) booting = ensureApp({ repo, onProgress }).catch(() => null)
+  return booting
+}
+
 /** @returns {Promise<{url:string, external:boolean}|null>} null when the app cannot be brought up */
 export async function ensureApp({ repo, onProgress = () => {} }) {
+  // A boot already in flight (warmApp, or a previous node): wait for it rather than probing a
+  // half-started server and concluding it is broken.
+  if (booting) {
+    const pending = booting
+    booting = null
+    const r = await pending
+    if (r) return r
+  }
+
   const profile = loadProfile(repo)
   const url = URL_(repo)
   const u = new URL(url)
@@ -88,6 +112,7 @@ export async function ensureApp({ repo, onProgress = () => {} }) {
 }
 
 export function stopApp() {
+  booting = null
   if (!child) return
   try { process.kill(-child.pid, 'SIGTERM') } catch { try { child.kill('SIGTERM') } catch { /* gone */ } }
   child = null

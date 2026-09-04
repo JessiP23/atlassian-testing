@@ -1,0 +1,72 @@
+fix(agent): one 20-minute deadline, never lose the work, and stop trusting the log tail
+
+Six gaps from the production review, plus the latency work that makes the 20-minute cap real
+rather than aspirational. Every deterministic part touched here now has tests (57, ~120ms) that
+run in CI before a model is paid for.
+
+THE THREE HIGH-SEVERITY GAPS
+
+  lib/secrets.mjs (new)  The path guard answers "which files may this run have changed"; nothing
+  answered "is there a credential inside one of them". A key written into an allowed source file
+  passed the guard, passed lint, passed the gate and landed in a PR. verify now scans the ADDED
+  diff lines and refuses `secret_in_diff` — fatal, never repaired, never salvaged, and the refusal
+  never echoes the value. Context and removed lines are ignored: a pre-existing secret fails every
+  run forever and is somebody else's ticket. `pag-allow-secret` is the reviewable opt-out.
+
+  publish.mjs  `gh pr create` was unconditional, so a second dispatch of the same ticket wrote the
+  fix, pushed the branch and died on "a pull request already exists". Now: create-or-update. And
+  before force-pushing, `remoteBranchOwner` checks who authored the commits the branch adds on top
+  of the pinned base — the agent's own earlier attempt is overwritten, a human's commit is never
+  touched (the run takes `-r2` and opens its own PR, and says so in the body).
+
+  publish.mjs  `addComment` only ever ran on the refuse path, so a SUCCESSFUL run left no trace on
+  the ticket. The PR link, the evidence label, the gate verdict and the spend are now written back
+  on success, with `PAG_JIRA_TRANSITION` as an opt-in column move.
+
+THE DEADLINE, AND WHY KAN-6 THREW AWAY A CORRECT FIX
+
+lib/budget.mjs owns one clock. Each phase declares `ceilMs` (the most it may ever hold) and
+`needMs` (what the phases after it must be left), and `timeFor()` hands out
+min(ceiling, left - downstream). An early phase therefore cannot eat the clock publish needs, and a
+late phase automatically inherits what the earlier ones did not use. reproduce's separate 7-minute
+ceiling is gone; it is one entry in that table now, shared across its attempts.
+
+The routing change matters more than the arithmetic. `time_budget` used to be a REFUSAL: on KAN-6
+the witness spent 566s, repair started with 149s, and the branch, the diff and eight paired
+screenshots were deleted at minute 20. The expensive part of a run is the diagnosis, and discarding
+it at the last step is the worst thing this workflow can do. So verify now has a third answer —
+`handover` — which publishes the work as an explicitly INCOMPLETE draft: `[INCOMPLETE]` in the
+title, `agent:incomplete` label, a WARNING block leading the body with the remaining failures
+parsed out, and a Jira comment that says do not merge as-is. A fatal refusal is still a refusal.
+
+REPAIR STOPS REDISCOVERING THE FAILURE
+
+lib/gatelog.mjs (new) parses lint/tsc/next-build/jest/playwright output into {file,line,rule,
+message}. repair was handed `out.slice(-8000)`, and on a lint failure the last 8 KB is the footer —
+the one error's file and line are thousands of characters earlier and usually truncated away, so
+the session's first minutes went to re-running the gate itself, on Opus, inside its own slice.
+Two parser bugs the tests caught immediately: the nx `project: ` stripper was eating file paths off
+the front of every tsc line, and greedy backtracking captured `t.tsx` out of a jest stack frame.
+
+LATENCY: STOP WAITING IN SERIES
+
+  - The clean-checkout baseline (60-120s) started before intake had read the ticket and nothing
+    needs it until verify, six minutes later. It is now a promise; `snap.ready()` is awaited inside
+    verify, immediately before the store is consulted.
+  - `next dev` takes 10-40s to open its port and compile the first route, and that was dead clock
+    inside reproduce. `warmApp()` boots it while intake/locate/plan are round-tripping to Bedrock;
+    lib/app.mjs shares the one in-flight boot so nothing races a second server onto the port.
+  - lint, typecheck and test are independent read-only processes and ran in series, twice per run
+    whenever repair fired. They run concurrently now. `build` is `exclusive` in the profile (it
+    writes the same .next/ the witness's dev server is reading) and `optional` — under a tight
+    clock the gate skips it and the Evidence section says so, rather than missing the deadline.
+  - The workflow caches the Playwright browser (~90s → ~6s) and runs its four installs concurrently.
+
+Also: a lint/typecheck failure in a file this patch never touched is no longer attributed to it
+(`npm run lint` covering the whole repo is the normal case); the witness spec is committed into the
+diff where the repo can actually run it (`profile.e2eDir`, before the gate so it is verified);
+evidence pairing moved to lib/evidence.mjs with the unequal-frame-count case pinned; and the run
+prints its own per-phase wall time, which is the number the budget table should be tuned on.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

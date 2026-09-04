@@ -29,13 +29,30 @@ export default {
   baselineAll: true,
   typeConsumersFor: () => [],
 
+  // `exclusive: true` means "must run alone". Everything else in the plan runs CONCURRENTLY —
+  // lint, typecheck and test are read-only processes and waiting for them in series was pure dead
+  // clock. `next build` is exclusive because it writes .next/, which the witness's dev server is
+  // also using; running them together corrupts both. `optional: true` is what the deadline is
+  // allowed to drop: tsc --noEmit already covers most of what build would catch, so under a tight
+  // clock the run reports "build skipped" in the PR rather than missing the deadline.
   gate(repo) {
     const plan = []
     if (has(repo, 'lint')) plan.push({ target: 'lint', projects: ['app'], argv: ['npm', 'run', '--silent', 'lint'] })
     if (fs.existsSync(path.join(repo, 'tsconfig.json'))) plan.push({ target: 'typecheck', projects: ['app'], argv: ['npx', 'tsc', '--noEmit'] })
     if (has(repo, 'test')) plan.push({ target: 'test', projects: ['app'], argv: ['npm', 'run', '--silent', 'test'] })
-    if (has(repo, 'build')) plan.push({ target: 'build', projects: ['app'], argv: ['npm', 'run', '--silent', 'build'] })
+    if (has(repo, 'build')) plan.push({ target: 'build', projects: ['app'], argv: ['npm', 'run', '--silent', 'build'], exclusive: true, optional: true })
     return plan
+  },
+
+  /**
+   * Where a generated Playwright spec may be COMMITTED so it ships in the diff and a human can
+   * re-run it — but only when this repo can actually run one. Dropping a spec plus its fixtures
+   * into a repo with no `@playwright/test` gives the reviewer a file that cannot execute and
+   * breaks their own CI on the next push, which is worse than no spec. When this returns null the
+   * witness spec still reaches the reviewer: inlined in the PR body and on the evidence branch.
+   */
+  e2eDir(repo) {
+    return hasDep(repo, '@playwright/test') ? 'e2e' : null
   },
 
   // No jest/vitest in a starter app: the unit rung is unavailable, and reproduce goes to the

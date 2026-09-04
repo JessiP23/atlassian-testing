@@ -16,28 +16,58 @@ mechanism, not an intention: "done" means a real run exercised it.
 | 7 | Patch: Claude Code inside the allowlist, git denied at the tool layer | KAN-6, 188s, $0.89, witness went green |
 | 8 | Bedrock 503 = wait, not error: real backoff + `us.`→`global.`→bare profile walk | stubbed-client test, recovered on attempt 5 |
 | 9 | A node that throws is a refusal with a timeline, not a stack trace | `ci.mjs` catch |
+| 10 | State-by-state evidence: soft `check()`, screenshots named, PR table paired BY NAME | KAN-6: 8 red → 8 green + GIF, first draft PR |
+| 11 | Content scan of the ADDED diff lines — a credential in an allowed file is a refusal | `test/secrets.test.mjs`, 9 cases incl. the false-positive set |
+| 12 | Gate output parsed to `{file,line,rule,message}` before repair is paid for | `test/gatelog.test.mjs`, 9 real output shapes |
+| 13 | One deadline, sliced per phase, with publish always reserved | `test/budget.test.mjs`, 11 cases |
+| 14 | Out of clock with a diff = INCOMPLETE draft PR, not a deleted branch | `test/routing.test.mjs`, the KAN-6 case pinned |
+| 15 | Re-running a ticket is safe: create-or-update the PR, never force over a human commit | `remoteBranchOwner` + `createOrUpdatePr` |
+| 16 | The PR link is written back onto the Jira ticket on SUCCESS, not only on refusal | `publish.mjs` |
+| 17 | Baseline, app boot and the gate all run concurrently with the phases that don't need them | `snap.setPending` / `warmApp` / `Promise.all` |
+| 18 | 57 self-tests over the deterministic parts, run in CI before a model is paid for | `npm --prefix agent/graph test` |
 
 ## Next, in order
 
-1. **Close KAN-6.** The witness output landed inside the repo (`agent/graph/witness/pw-out/`), which
-   is a DENIED path, so a correct run was refused at the last step. Output now goes to the run
-   folder or the OS temp dir, and agent scratch is filtered out of the diff before the guard sees
-   it. Re-run to get the first draft PR with paired before/after images.
-2. **State-by-state evidence.** `check(page, 'NN-state', …)` asserts softly and screenshots the
-   state it judged, so the red run walks the whole flow instead of dying on criterion 1. The PR
-   pairs the two runs BY NAME and says plainly which states the broken build never reached.
-3. **Measure over ~10 tickets:** how many land `evidence:e2e` / `evidence:repro` / `evidence:none`,
-   wall time, cost per ticket. That table decides everything below it.
-4. **Unit rung for this repo** — add vitest so a non-UI ticket has a rung besides the browser
-   (`profiles/nextjs.mjs → testOne` already detects jest/vitest and will start using it).
-5. **Cheap tier** — `PAG_CHEAP_NODES=intake,rerank,plan,package` on `us.openai.gpt-5.6-luna`
+1. **Run T1–T5** (`agent/TICKETS-HARD.md`) and fill in the table below. That measurement decides
+   everything under it, and nothing under it should be built before the table exists.
+
+   | Ticket | Evidence label | Wall time | Cost | Repairs | Outcome | Would you merge it? |
+   |---|---|---|---|---|---|---|
+   | T1 filter + URL state | | | | | | |
+   | T2 API route + optimistic UI | | | | | | |
+   | T3 dialog focus trap | | | | | | |
+   | T4 misattributed footer | | | | | | |
+   | T5 paginated list (sized to hit the diff cap) | | | | | | |
+
+   T4 is deliberately wrong about where the bug is: the finding is whether it escalates with
+   `NEED:` instead of guessing. T5 is sized to hit `DIFF_LIMITS` — whether it lands, escalates or
+   refuses on size is the finding. **Do not raise the caps before seeing which.**
+
+2. **Unit rung for this repo** — add vitest so a non-UI ticket has a rung besides the browser
+   (`profiles/nextjs.mjs → testOne` already detects jest/vitest and will start using it). This is
+   also what makes `e2eDir` non-null here, so the witness spec starts shipping inside the diff.
+3. **Cheap tier** — `PAG_CHEAP_NODES=intake,rerank,plan,package` on `us.openai.gpt-5.6-luna`
    ($0.44/$1.98 vs Haiku's $1/$5). Bench the rerank before trusting it; it is the one that moves
-   hit@5.
-6. **Port back to Pioneer.** `PAG_PROFILE=nx` + `PAG_ALLOWED_REMOTE=AssetPandaLLC/pioneer`. The
+   hit@5. It cannot hold `patch`/`repair`/`repro` — no tool use — and `models.mjs` throws if you try.
+4. **Port back to Pioneer.** `PAG_PROFILE=nx` + `PAG_ALLOWED_REMOTE=AssetPandaLLC/pioneer`. The
    graph does not change; what changes is the profile and the fact that Pioneer has a real test
    runner, so the unit rung carries most tickets and the witness is for the web client only.
-7. **Jira write-back** — comment the PR link and the evidence label on the ticket (the code path
-   exists in `refuse`; extend it to `publish`).
+5. **Then, only if the T1–T5 table says so:** more repair attempts, a wider diff cap, or a second
+   re-plan. Each of those is a number, and each one should be moved by evidence from a run, not by
+   a hunch about what "should" work.
+
+## Known limits, stated on purpose
+
+- **`build` is droppable.** Under a tight clock the gate skips it and the PR says so in the
+  Evidence section. `tsc --noEmit` covers most of what it would catch, and CI on the PR runs the
+  full gate. It is a disclosed gap, not a silent one.
+- **A hand-over bypasses `PAG_REQUIRE_APPROVAL`.** An incomplete draft is already labelled
+  `agent:incomplete` and titled `[INCOMPLETE]`, and a human has to finish it either way.
+- **The witness spec only ships in the diff where the repo has `@playwright/test`**
+  (`profile.e2eDir`). Elsewhere it reaches the reviewer inlined in the PR body and on the evidence
+  branch — a spec that cannot run in the repo it lands in is worse than no spec.
+- **Only the first source target gets a reproducing test.** A ticket whose symptom needs two files
+  to reproduce gets one rung and honest `evidence:none` on the other.
 
 ## Deliberately not doing yet
 
