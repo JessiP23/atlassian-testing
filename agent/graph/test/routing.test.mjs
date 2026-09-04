@@ -68,3 +68,27 @@ test('every route a predicate can return is a node the graph declares', () => {
   ]
   for (const r of returned) assert.ok(declared.has(r), `route "${r}" is not a declared node`)
 })
+
+test('ESI2-3393: failures only in the frozen repro file skip repair entirely', () => {
+  // repair is told it may not edit the reproducing test, and verify hash-checks it. Three attempts
+  // that each correctly answer "the failures are in the file I am not allowed to edit" is $0.75
+  // and 130s of nothing.
+  const frozen = 'packages/libs/import/src/records-processor/format-filter-value.repro.test.ts'
+  const s = {
+    gate: { ok: false, failures: [{ file: frozen, rule: 'no-extra-semi' }, { file: frozen, rule: '@nx/enforce-module-boundaries' }] },
+    repro: { status: 'red', file: frozen },
+    changed: ['packages/lambdas/fns/import-one-schema-template/src/one-schema-template/get-template-columns.ts'],
+    attempts: 0,
+  }
+  assert.equal(afterVerifyWith(clock(3))(s), 'handover')
+})
+
+test('a failure outside the frozen file still goes to repair', () => {
+  const frozen = 'app/x.repro.test.ts'
+  const s = {
+    gate: { ok: false, failures: [{ file: frozen, rule: 'no-extra-semi' }, { file: 'app/real.ts', rule: 'TS2322' }] },
+    repro: { status: 'red', file: frozen },
+    changed: ['app/real.ts'], attempts: 0,
+  }
+  assert.equal(afterVerifyWith(clock(3))(s), 'repair')
+})

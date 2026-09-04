@@ -1,0 +1,41 @@
+fix(repro): lint the reproducing test before freezing it, and stop repairing what cannot be edited
+
+ESI2-3393 on pioneer did everything right and then deadlocked on two style errors in its own test.
+
+The run: retrieval found the area in a 6,901-file monorepo; the first repro attempt wrote a test
+that PASSED and was correctly rejected as not-a-reproduction; the second went red and named the
+real root cause (`get-template-columns.ts` read `noOfDecimals` from `numericSettings['/properties/value']`,
+the CURRENCY key, while a plain Numeric field stores it under `''`); patch found the bug was in
+neither allowed file and escalated `NEED:` with the exact paths; the re-plan widened, the fix
+landed, the frozen repro went GREEN and both suites passed.
+
+Then `nx lint` failed — on the reproducing test itself. `no-extra-semi` and
+`@nx/enforce-module-boundaries`, in a file that is hash-frozen and that `repair` is explicitly told
+it may not edit. So repair went three times, spent $0.75 and 130 seconds, and each attempt
+correctly answered "the failures are in the file I am not allowed to edit". The run handed over with
+a red gate over two style errors in code it wrote itself, with the product fix sitting green
+underneath.
+
+Two changes, and the first is the real one:
+
+  THE FREEZE NOW COMES AFTER THE FILE IS ACCEPTABLE, NOT BEFORE.  reproduce runs `npx eslint` on the
+  spec while it is still that node's to edit. Lint errors are handed back with the assertions
+  declared off-limits, and it tries again. If the last attempt still cannot produce a lint-clean
+  test, the spec is DELETED and the run degrades to evidence:none with that reason — shipping a
+  lint-dirty test into someone's repo is worse than shipping no test, because it breaks their CI on
+  a file the reviewer did not write. The prompt now says this up front, including the two rules
+  that actually bit: import the way the nearest existing spec in the same project imports, because
+  a cross-package import fails @nx/enforce-module-boundaries, and do not start a line with a
+  semicolon.
+
+  A GATE FAILURE INSIDE THE FROZEN FILE SKIPS REPAIR.  If every remaining failure is in the
+  reproducing test, no repair attempt can fix any of them by construction. Routing recognises that
+  on the first pass and hands over immediately, with a reason that says what a human should
+  actually do — clear the lint on that test or delete it, the product fix is already green —
+  instead of three identical Opus sessions arriving at the same sentence.
+
+Two tests pin the routing: all-failures-in-the-frozen-file goes straight to handover, and one
+failure outside it still goes to repair.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

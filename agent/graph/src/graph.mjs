@@ -75,10 +75,27 @@ export function afterPatch(s) {
 // diagnosis; discarding it at the last step is the single worst thing this workflow can do.
 const SALVAGE = process.env.PAG_HANDOVER !== '0'
 
+export /**
+ * Is every remaining failure inside the frozen reproducing test?
+ *
+ * If so, `repair` cannot fix any of them — the file is hash-checked and it is told it may not edit
+ * it — so sending it there buys nothing. On ESI2-3393 it went three times, spent $0.75 and 130
+ * seconds, and each attempt correctly answered "the failures are in the file I am not allowed to
+ * edit". Recognising that on the first pass turns three useless Opus sessions into an immediate
+ * hand-over with an accurate reason.
+ */
+function onlyFrozenFileFails(s) {
+  const f = s.gate?.failures || []
+  if (!f.length || !s.repro?.file) return false
+  const frozen = String(s.repro.file)
+  return f.every((x) => x.file && (frozen.endsWith(x.file) || x.file.endsWith(frozen) || x.file === frozen))
+}
+
 export function afterVerifyWith(budget) {
   return (s) => {
     if (s.refusal) return 'refuse'
     if (s.gate?.ok) return 'approve'
+    if (onlyFrozenFileFails(s)) return SALVAGE && s.changed?.length ? 'handover' : 'refuse'
     const attemptsLeft = (s.attempts ?? 0) < MAX_REPAIR_ATTEMPTS
     const clock = budget.timeFor('repair') >= 45_000
     if (attemptsLeft && clock) return 'repair'
@@ -147,7 +164,10 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
   // its own step, so a reviewer of the run can see exactly where the clock ran out.
   const handoverNode = async (s) => {
     const left = Math.round(budget.timeLeftMs() / 1000)
-    const reason = (s.attempts ?? 0) >= MAX_REPAIR_ATTEMPTS && left > 60
+    const reason = onlyFrozenFileFails(s)
+      ? `Every remaining gate failure is inside the frozen reproducing test, which no step may edit — `
+        + `the product fix itself is green. Clear the lint on that test, or delete it, and the gate passes.`
+      : (s.attempts ?? 0) >= MAX_REPAIR_ATTEMPTS && left > 60
       ? `It used all ${MAX_REPAIR_ATTEMPTS} repair attempts and the gate is still red.`
       : `It reached the ${budget.maxMinutes}-minute deadline with ${left}s left — not enough to attempt another fix and still publish.`
     onProgress(`HANDOVER: ${reason} Publishing the diff as an incomplete draft.`)

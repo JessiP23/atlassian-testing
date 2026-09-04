@@ -30,6 +30,7 @@ import { runClaude } from '../lib/agent.mjs'
 import { reproPathFor, reproCommand, runSpec, sha256, saveEvidence, excerpt,
   witnessSpecPath, witnessCommand, runWitness, collectWitness, shipWitness, WITNESS_FIXTURES } from '../lib/repro.mjs'
 import { ensureApp } from '../lib/app.mjs'
+import { parseGateFailures, formatFailures } from '../lib/gatelog.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
 
 const exec = promisify(execFile)
@@ -156,6 +157,13 @@ spec file (imports, mocks, describe/it naming).`}
    value the ticket complains about.
 3. Stop. Leave the file in its inverted (failing) state. Do not fix the code. Do not touch any other
    file. Do not commit.
+
+## It must also pass this repo's lint
+The file is frozen the moment it goes red, so nothing can fix it afterwards — a lint error here
+stops the whole run at the gate. Before you finish, run \`npx eslint <the file>\` and clear
+anything it reports. In particular: import EXACTLY the way the nearest existing spec in this same
+project imports, because a cross-package import the repo forbids fails
+\`@nx/enforce-module-boundaries\`, and do not start a line with a semicolon.
 ${previous ? `\n## Previous attempt\n${previous}\n` : ''}
 Finish with one line: \`REPRO: red\` if step 2 failed as intended, or \`REPRO: none <one-sentence reason>\`
 if the symptom cannot be made to fail in a test at this level (say why: needs a browser, needs a live
@@ -249,7 +257,36 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         continue
       }
 
-      // RED. Freeze it and keep the receipt.
+      // ---- the spec must survive the repo's OWN lint, before it is frozen -------------------
+      //
+      // ESI2-3393 deadlocked here. The spec went red for exactly the right reason and found the
+      // real root cause — and then `nx lint` failed on the spec itself (`no-extra-semi`,
+      // `@nx/enforce-module-boundaries`). By then it was frozen, so `repair` could not touch it;
+      // it burned all three attempts saying "the failures are in the file I am not allowed to
+      // edit" and the run handed over with a red gate over two style errors in its own test.
+      //
+      // The freeze has to come AFTER the file is acceptable to the repo, not before. Right here
+      // the spec is still this node's to edit, so lint it, hand the errors back, and try again.
+      const lint = await exec('npx', ['eslint', '--no-error-on-unmatched-pattern', specFile], { cwd: s.repo, maxBuffer: 1 << 24, timeout: 120_000 })
+        .then(() => ({ ok: true, out: '' }))
+        .catch((e) => ({ ok: false, out: `${e.stdout || ''}${e.stderr || ''}` }))
+      if (!lint.ok) {
+        const problems = parseGateFailures(lint.out, 'lint').filter((f) => specFile.endsWith(f.file) || f.file.endsWith(path.basename(specFile)))
+        if (problems.length) {
+          onProgress(`repro is red but fails the repo's lint (${problems.map((f) => f.rule).filter(Boolean).join(', ')}) — a frozen file cannot be fixed later, so fixing it now`)
+          previous = `Attempt ${attempt}: the test correctly FAILED, which is right — but it does not pass this repo's lint, and once frozen nobody can fix it:\n\n${formatFailures(problems)}\n\n`
+            + 'Keep the assertions exactly as they are. Fix only the lint problems. For module-boundary errors, import the same way the nearest existing spec in this project imports — do not reach across a package boundary the repo forbids.'
+          if (attempt === ATTEMPTS) {
+            // Shipping a lint-dirty test into their repo is worse than shipping no test: it breaks
+            // their CI on a file the reviewer did not write. Degrade honestly instead.
+            fs.rmSync(path.join(s.repo, specFile), { force: true })
+            return { repro: { status: 'none', rung, reason: `a reproducing test was written and it did fail correctly, but it could not be made to pass this repo's lint (${problems.map((f) => f.rule).filter(Boolean).join(', ')}) and a frozen test cannot be fixed afterwards` } }
+          }
+          continue
+        }
+      }
+
+      // RED, and clean. Freeze it and keep the receipt.
       const sha = sha256(s.repo, specFile)
       saveEvidence('repro.test.ts', fs.readFileSync(path.join(s.repo, specFile), 'utf8'))
       saveEvidence('repro-red.log', red.out)
