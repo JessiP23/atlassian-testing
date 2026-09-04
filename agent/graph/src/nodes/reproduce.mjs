@@ -41,7 +41,10 @@ const REPRO_BUDGET = Number(process.env.PAG_REPRO_BUDGET || 1.5)
 // budget.timeFor('reproduce') is min(its own ceiling, what is left after patch/verify/publish are
 // reserved), so it can never eat the deliverable — and the two attempts share it rather than each
 // getting the whole thing.
-const attemptShare = (budget, attempt) => Math.floor(budget.timeFor('reproduce') / (ATTEMPTS - attempt + 1))
+// The phase ceiling is a TOTAL across both attempts, not a fresh allowance per attempt — see
+// Budget.phaseTimeFor. KAN-11 overran 360s -> 553s because this used to recompute from the run's
+// remaining clock, and the overrun was taken out of `patch`.
+const attemptShare = (budget, attempt) => budget.phaseTimeFor('reproduce', ATTEMPTS - attempt + 1)
 
 const UI_EVIDENCE = process.env.PAG_UI_EVIDENCE === '1'
 

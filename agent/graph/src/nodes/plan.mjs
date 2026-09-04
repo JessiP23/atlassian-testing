@@ -10,6 +10,7 @@ import path from 'node:path'
 import { converseJson } from '../lib/bedrock.mjs'
 import { tierFor, estimateCost } from '../lib/models.mjs'
 import { DIFF_LIMITS } from '../lib/guard.mjs'
+import { loadProfile } from '../../profiles/index.mjs'
 
 // Soft target given to the planner. The hard cap in guard.mjs still applies to the real diff; this
 // is what keeps a plan from ballooning to 8 files and a 21k-token context pack.
@@ -34,7 +35,7 @@ Return JSON:
 {"impactedFiles":[str],"steps":[str],"newTests":[{"file":str,"pins":str}],
  "migrationNotes":str,"needsEscalation":bool,"escalationReason":str}`
 
-export function planNode({ budget }) {
+export function planNode({ budget, onProgress = () => {} }) {
   return async (s) => {
     const tier = tierFor('plan')
 
@@ -102,6 +103,22 @@ export function planNode({ budget }) {
     if (!data.impactedFiles?.length) {
       return { plan: data, refusal: { at: 'plan', reason: 'empty_plan', detail: 'planner named no files to change' } }
     }
+    // A repo with NO unit test runner must not be handed a plan that demands unit tests.
+    //
+    // KAN-11: `profile.testOne` returns null here (no jest, no vitest), but the plan still listed
+    // `newTests`, so the patch session spent most of its 420s trying to find a way to run them —
+    // it read this workflow's own source looking for a test command, built a scratch project in
+    // /tmp to try `node --experimental-strip-types --test`, and wrote a TypeScript loader hook.
+    // All of that was work the ticket never asked for, and the session was killed mid-edit.
+    //
+    // The witness (a Playwright spec against the running app) is this repo's evidence rung and it
+    // has already run by the time patch starts. Asking for unit tests on top is asking for a test
+    // harness, which is its own ticket.
+    if (!loadProfile(s.repo).testOne(s.repo, 'x.test.ts') && data.newTests?.length) {
+      onProgress(`plan asked for ${data.newTests.length} unit test(s) but this repo has no test runner — dropping them; the browser witness is the evidence rung here`)
+      data.newTests = []
+    }
+
     // Drop any test files the planner put in impactedFiles anyway — they belong in newTests, and
     // counting them against the production budget skews the context pack.
     const { isTestFile } = await import('../lib/guard.mjs')

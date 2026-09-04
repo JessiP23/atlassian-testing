@@ -74,6 +74,19 @@ if (!has('skip-index')) {
   console.log(`  index: ${n} file(s) in ${((Date.now() - t0) / 1000).toFixed(0)}s`)
 }
 
+// ---- 1b. generate framework types, so `tsc --noEmit` is a real check --------------------------
+//
+// app/layout.tsx uses `LayoutProps<"/">`, which Next writes into .next/types. On a fresh checkout
+// that directory does not exist, so `tsc --noEmit` fails before anything is edited — on KAN-11 the
+// baseline correctly recorded `app:typecheck` as already-failing on the pinned commit and the gate
+// ignored it for the rest of the run. That is the baseline doing its job, and it is also a gate
+// target that can never catch a real type error. `next typegen` costs a couple of seconds.
+if (profile.name === 'nextjs') {
+  await exec('npx', ['next', 'typegen'], { cwd: repo, timeout: 120_000 })
+    .then(() => console.log('  typegen: .next/types generated — typecheck is now a real gate'))
+    .catch((e) => console.log(`  typegen: skipped (${String(e.message).split('\n')[0].slice(0, 70)}) — typecheck may baseline as already-failing`))
+}
+
 // ---- 2. baseline the gate on the CLEAN checkout — CONCURRENTLY ------------------------------
 //
 // Without a baseline, every failure the gate sees is attributed to the patch. On KAN-6 the only

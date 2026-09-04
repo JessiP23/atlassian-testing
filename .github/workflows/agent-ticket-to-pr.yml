@@ -66,9 +66,13 @@ env:
   # THE deadline. agent/graph/src/lib/budget.mjs slices it per phase and reserves what publish
   # needs, so a run cannot spend the clock on the reproducing test and then have nothing to show.
   # The two ceilings below are the only per-phase knobs; everything else adapts.
-  PAG_MAX_MINUTES: ${{ vars.PAG_MAX_MINUTES || '20' }}
+  # 20 minutes is right for a BUG FIX and too tight for a feature. KAN-11 (a route handler + a
+  # client component + five UI states) spent 553s on the witness and was killed mid-edit at 420s of
+  # patch. Raised to 30/12; the phase table adapts the rest, and an easy ticket still finishes in
+  # ~10 because every phase only takes what it needs. Lower them per-repo with the repo variables.
+  PAG_MAX_MINUTES: ${{ vars.PAG_MAX_MINUTES || '30' }}
   PAG_REPRO_MINUTES: ${{ vars.PAG_REPRO_MINUTES || '6' }}
-  PAG_PATCH_MINUTES: ${{ vars.PAG_PATCH_MINUTES || '7' }}
+  PAG_PATCH_MINUTES: ${{ vars.PAG_PATCH_MINUTES || '12' }}
   # A run that hits the deadline with the gate still red publishes an INCOMPLETE draft PR carrying
   # the diff, the evidence and the remaining failures, instead of deleting the branch. Set to 0 to
   # go back to refusing.
@@ -93,7 +97,7 @@ jobs:
   agent:
     name: ${{ github.event.client_payload.issue_key || inputs.issue_key }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35   # backstop only: the agent enforces PAG_MAX_MINUTES itself
+    timeout-minutes: 45   # backstop only: the agent enforces PAG_MAX_MINUTES itself
     outputs:
       pr_url: ${{ steps.agent.outputs.pr_url }}
       evidence: ${{ steps.agent.outputs.evidence }}

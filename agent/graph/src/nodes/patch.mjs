@@ -71,8 +71,17 @@ the root cause, and the fix you would make. That first line is parsed by the wor
 re-plan with those files allowed and hand the work back to you — so name the files precisely and
 name only what you need.
 
-## Required tests
-${(s.plan.newTests || []).map((t) => `- ${t.file} — pins: ${t.pins}`).join('\n')}
+## Tests
+${(s.plan.newTests || []).length
+  ? (s.plan.newTests || []).map((t) => `- ${t.file} — pins: ${t.pins}`).join('\n')
+  : `This repo has NO unit test runner — no jest, no vitest, no \`npm test\`. Do not add one, do not
+add a test dependency, and do not spend time looking for a way to run unit tests: there isn't one,
+and finding out costs minutes you need for the fix. The evidence for this ticket is the browser
+witness above, which has already been written and proven red. Make it pass.`}
+
+## Out of bounds
+Everything under \`agent/\` is this workflow's own source, not part of the product. Do not read it,
+do not edit it, do not copy its conventions. Nothing you need for this ticket is in there.
 ${s.repro?.status === 'red' ? `
 ## The reproducing test — READ-ONLY
 \`${s.repro.file}\` already exists. It FAILS on the current code and encodes the bug exactly as the
@@ -177,10 +186,6 @@ export function patchNode({ budget, onProgress = () => {} }) {
       onProgress(`escalated: needs ${neededFiles.length ? neededFiles.join(', ') : '(no usable path named)'}`)
       return { escalation: { text, neededFiles }, refusal: null }
     }
-    if (code !== 0 && subtype !== 'success') {
-      return { refusal: { at: 'patch', reason: subtype || `exit_${code}`, detail: 'patch phase did not complete' } }
-    }
-
     // ---- Enforce the contract on the REAL diff, not on the model's word ----------------------
     const { stdout: names } = await exec('git', ['diff', '--name-only', 'HEAD'], { cwd: s.repo, maxBuffer: 1 << 24 })
     const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: s.repo, maxBuffer: 1 << 24 })
@@ -202,6 +207,27 @@ export function patchNode({ budget, onProgress = () => {} }) {
         onProgress(`diff saved to ${path.join(runDir, 'patch.diff')}`)
       }
     } catch { /* never fail a run over bookkeeping */ }
+
+    // ---- did the session finish, and does it matter? -----------------------------------------
+    //
+    // KAN-11: the patch session hit its 420s wall-clock kill having already written
+    // `app/api/assets/route.ts`, a rewritten `app/page.tsx` and a test file — and the run REFUSED,
+    // so all of it was deleted. That is the exact loss the hand-over path was built to stop, and it
+    // was only ever wired to the verify->repair edge; a patch that ran out of clock had no way out.
+    //
+    // A timeout is not a verdict on the work. It says the session stopped, not that what it wrote
+    // is wrong. So when there IS a diff, the run continues into `verify`, where the whole safety
+    // chain still applies unchanged: the path guard, the secret scan, the frozen witness, the gate.
+    // If the partial work is good, it publishes. If it is half-written it fails the gate and
+    // becomes an INCOMPLETE draft a human can finish. Either beats deleting it.
+    //
+    // With no diff there is genuinely nothing to carry forward, and that is still a refusal.
+    if (code !== 0 && subtype !== 'success') {
+      if (!changed.length) {
+        return { refusal: { at: 'patch', reason: subtype || `exit_${code}`, detail: 'the patch session did not complete and wrote nothing' } }
+      }
+      onProgress(`patch ${subtype || `exit_${code}`} after ${(budget.report().phases.at(-1)?.ms ?? 0) / 1000 | 0}s, but ${changed.length} file(s) were written — carrying them into verify rather than discarding them`)
+    }
 
     const verdict = classify(changed, s.plan.impactedFiles, plannedTests)
 

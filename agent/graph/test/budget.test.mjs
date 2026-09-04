@@ -29,7 +29,9 @@ test('an early phase cannot eat what the later ones need', () => {
   // and publish still have to happen inside the remaining 6.
   const b = at(14)
   assert.ok(b.timeFor('reproduce') < PHASES.reproduce.ceilMs)
-  assert.ok(b.timeFor('reproduce') <= b.timeLeftMs() - downstreamMs('reproduce'))
+  // Clamped on both sides: past the point where the downstream reserve exceeds what is left,
+  // timeFor is 0 and `left - downstream` is negative. 0 is the correct answer, not a violation.
+  assert.ok(b.timeFor('reproduce') <= Math.max(0, b.timeLeftMs() - downstreamMs('reproduce')))
 })
 
 test('publish is never reserved against — it is the deliverable', () => {

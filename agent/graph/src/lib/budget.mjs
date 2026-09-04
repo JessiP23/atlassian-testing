@@ -45,7 +45,12 @@ export const PHASES = {
   verify:    { ceilMs: 240_000, needMs: 120_000 },
   repair:    { ceilMs: 180_000, needMs:      0 },   // optional phase: reserves nothing for itself
   package:   { ceilMs:  60_000, needMs:  20_000 },
-  publish:   { ceilMs: 180_000, needMs:      0 },
+  // needMs is what EVERY phase upstream must leave behind, and publish is the deliverable: a
+  // Bedrock call for the prose, the evidence branch push, the commit, the push, `gh pr create`
+  // and the Jira comment. At 0 an over-running `repair` could hand over with 20 seconds left and
+  // the PR would die halfway through being opened. downstreamMs('publish') is still 0 — nothing
+  // comes after it — so this reserves for publish without publish reserving against itself.
+  publish:   { ceilMs: 180_000, needMs:  90_000 },
 }
 
 /** Milliseconds that must still be on the clock when `node` hands over. */
@@ -68,6 +73,7 @@ export class Budget {
     this.spent = 0
     this.ledger = []
     this.phases = []          // { node, ms } — what each phase actually took, for the PR footer
+    this.phaseT0 = {}         // when each phase started, so a ceiling can be a TOTAL not a per-try
   }
 
   elapsedMs() { return Date.now() - this.t0 }
@@ -86,6 +92,33 @@ export class Budget {
     const left = this.timeLeftMs()
     if (!p) return Math.max(0, left - 60_000)
     return Math.max(0, Math.min(p.ceilMs, left - downstreamMs(node)))
+  }
+
+  /** Called by the graph wrapper as a node begins. Starts this phase's own stopwatch. */
+  startPhase(node) { this.phaseT0[node] = Date.now() }
+
+  /**
+   * Time left for a phase that runs SEVERAL attempts, as a share of what the PHASE has left —
+   * not of what the run has left.
+   *
+   * KAN-11 is why this exists. `reproduce` declares a 360s ceiling and took 553s: the old code
+   * asked `timeFor('reproduce')` fresh on each attempt, and that answers "how much of the RUN is
+   * left", which grows back relative to a phase that has already spent some. Attempt 1 got 360/2 =
+   * 180s, then attempt 2 recomputed and got the full 360s again. The ceiling was per-attempt when
+   * it was documented as per-phase, and the 193s it overran came straight out of `patch`, which
+   * then hit its own limit mid-edit.
+   *
+   * So: subtract what this phase has already burned, and only then divide by the attempts left.
+   */
+  phaseTimeFor(node, attemptsLeft = 1) {
+    const p = PHASES[node]
+    if (!p) return Math.floor(this.timeFor(node) / Math.max(1, attemptsLeft))
+    const used = this.phaseT0[node] ? Date.now() - this.phaseT0[node] : 0
+    const left = Math.min(
+      Math.max(0, p.ceilMs - used),                              // this phase's own remaining ceiling
+      Math.max(0, this.timeLeftMs() - downstreamMs(node)),       // and what the run can still spare
+    )
+    return Math.floor(left / Math.max(1, attemptsLeft))
   }
 
   /** True when `node` has enough clock to be worth starting at all. */

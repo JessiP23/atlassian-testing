@@ -1,0 +1,52 @@
+fix(agent): stop a patch timeout deleting the patch, and make a phase ceiling mean the phase
+
+KAN-11 refused at `patch: exit_timeout` after 993s having already written app/api/assets/route.ts,
+a rewritten app/page.tsx and a test file. All of it was discarded. Four causes, three of them bugs
+I introduced in the deadline work.
+
+1. A PHASE CEILING WAS PER-ATTEMPT, NOT PER-PHASE.  `reproduce` declares 360s and took 553s.
+   `attemptShare` asked `budget.timeFor('reproduce')` fresh on each attempt, and that answers "how
+   much of the RUN is left" — which does not shrink relative to a phase that has already spent
+   some. Attempt 1 got 360/2 = 180s; attempt 2 recomputed and got the full 360s again. The 193s of
+   overrun came straight out of `patch`, which then hit its own limit mid-edit.
+   Budget.phaseTimeFor() now subtracts what the phase has already burned (Budget.startPhase is
+   called by the graph wrapper) before dividing by the attempts left. 180 + 180 = 360, and it
+   reaches 0 when the ceiling is spent.
+
+2. A PATCH TIMEOUT HAD NO HAND-OVER.  The hand-over path was only ever wired to the verify->repair
+   edge, so `patch` running out of clock returned a refusal and `afterPatch` sent it to `refuse` —
+   deleting the most expensive output of the run at the one moment it was finally worth something.
+   A timeout is not a verdict on the work: it says the session stopped, not that what it wrote is
+   wrong. The diff is now computed BEFORE the completion check, and when a killed session left
+   files behind the run continues into `verify`, where the whole safety chain still applies
+   unchanged — path guard, secret scan, frozen witness, scoped gate. Good partial work publishes;
+   half-written work fails the gate and becomes an INCOMPLETE draft. A session that wrote nothing
+   is still a refusal, because there is nothing to carry.
+
+3. THE PLAN DEMANDED TESTS THE REPO CANNOT RUN.  `profile.testOne` returns null here (no jest, no
+   vitest) but the plan still listed `newTests`, so the patch session spent most of its 420s
+   hunting for a way to run them: it read this workflow's own source looking for a test command,
+   built a scratch project in /tmp to try `node --experimental-strip-types --test`, and wrote a
+   TypeScript loader hook. `planning` now drops newTests when the profile has no runner, the patch
+   prompt says plainly that there is none and not to add one, and `agent/` is declared out of
+   bounds — it is this workflow's source, not part of the product.
+
+4. `publish` RESERVED NOTHING FOR ITSELF.  `needMs: 0` meant an over-running `repair` could hand
+   over with 20s left, and publish needs a Bedrock call, the evidence branch push, a commit, a push,
+   `gh pr create` and a Jira comment. Now 90s, which every upstream phase reserves;
+   downstreamMs('publish') is still 0 because nothing comes after it.
+
+Budgets raised for feature-shaped tickets: PAG_MAX_MINUTES 20 -> 30, PAG_PATCH_MINUTES 7 -> 12.
+20 minutes is right for a bug fix and too tight for a route handler plus a client component plus
+five UI states. An easy ticket still finishes in ~10 because every phase takes only what it needs;
+replaying KAN-11's actual timings against the new table lands at 1430s of 1800s with the repair
+loop included.
+
+Also: `next typegen` before the baseline. app/layout.tsx uses `LayoutProps<"/">`, a type Next
+writes into .next/types, so on a fresh checkout `tsc --noEmit` fails before anything is edited —
+KAN-11's baseline correctly recorded `app:typecheck` as already-failing on the pinned commit and
+ignored it for the rest of the run. That is the baseline working, and it is also a gate target that
+could never catch a real type error. Two seconds fixes it permanently.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

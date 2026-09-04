@@ -101,6 +101,7 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     const wrapped = inner(name, fn)
     return async (s) => {
       const t0 = Date.now()
+      budget.startPhase(name)
       try { return await wrapped(s) } finally { budget.recordPhase(name, Date.now() - t0) }
     }
   }
@@ -156,7 +157,7 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
   const g = new StateGraph(S)
     .addNode('intake', N('intake', intakeNode({ budget })))
     .addNode('locate', N('locate', locateNode({ budget, onProgress })))
-    .addNode('planning', N('planning', planNode({ budget })))
+    .addNode('planning', N('planning', planNode({ budget, onProgress })))
     .addNode('reproduce', N('reproduce', reproduceNode({ budget, onProgress })))
     .addNode('patch', N('patch', patchNode({ budget, onProgress })))
     .addNode('verify', N('verify', verifyNode({ budget, onProgress })))
