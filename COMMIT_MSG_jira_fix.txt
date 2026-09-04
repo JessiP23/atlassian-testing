@@ -1,0 +1,25 @@
+fix: stop a bad Jira secret from costing a run, and never fail on the summary
+
+First CI run on KAN-5 refused at intake with "token rejected" and the Jira
+comment came back 404 with a localised body — the signature of an unauthenticated
+call. Two things were wrong, neither of them the agent's logic.
+
+- jiraConfig now sanitises JIRA_URL / JIRA_EMAIL / JIRA_API_TOKEN: wrapping
+  quotes, trailing newlines, non-breaking spaces and zero-width characters all
+  change the Basic header and produce a 401 that reads as "wrong token". It also
+  accepts JIRA_BASE_URL (the name this repo's other workflows use) and reports
+  which values had to be cleaned.
+- probeIssue's 401 verdict now names the SITE and EMAIL it actually used and
+  lists the three causes in order: wrong site for that key, wrong email for the
+  token, malformed token.
+- the workflow probes Jira BEFORE any model runs and stops on failure — a wrong
+  secret now costs $0 and 2 seconds instead of a refused run.
+- the job-summary step ended on a `for` loop whose last test was false, so a
+  successful run reported a failed step. It is now continue-on-error with an
+  explicit exit 0.
+- an unreplaced placeholder (PAG_APP_EMAIL=<QA user>) counted as a real login and
+  would have had the witness write a sign-in flow that cannot work; placeholders
+  are now treated as absent, in both the node and the spec fixtures.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T

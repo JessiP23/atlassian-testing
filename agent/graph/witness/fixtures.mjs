@@ -18,7 +18,10 @@ export { expect }
 
 /** Log in with the QA user. Idempotent: returns immediately if a session already exists. */
 export async function login(page, { email = process.env.PAG_APP_EMAIL, password = process.env.PAG_APP_PASSWORD } = {}) {
-  if (!email || !password) throw new Error('PAG_APP_EMAIL / PAG_APP_PASSWORD are not set — the witness cannot log in')
+  const bad = (v) => !v || /[<>]/.test(String(v)) || /^(your|todo|changeme)/i.test(String(v))
+  if (bad(email) || bad(password)) {
+    throw new Error('PAG_APP_EMAIL / PAG_APP_PASSWORD are not set to a real account — this spec must only use pages that need no login')
+  }
   await page.goto('/login')
   if (!(await page.locator('#password').isVisible({ timeout: 5_000 }).catch(() => false))) return // already in
   await page.locator('#email').fill(email)

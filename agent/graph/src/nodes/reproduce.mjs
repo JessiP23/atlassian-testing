@@ -40,7 +40,14 @@ const UI_EVIDENCE = process.env.PAG_UI_EVIDENCE === '1'
 
 // The witness rung: a Playwright spec against the RUNNING app. Same protocol (pass-first, invert,
 // red), different runner, and the artefacts are screenshots + video instead of a jest log.
-const HAS_LOGIN = () => Boolean(process.env.PAG_APP_EMAIL && process.env.PAG_APP_PASSWORD)
+// A half-filled .env is worse than an empty one: `PAG_APP_EMAIL=<QA user>` is truthy, so the
+// witness would spend a model call writing a login flow that cannot possibly work. Treat an
+// unreplaced placeholder as absent.
+const real = (v) => {
+  const x = String(v ?? '').trim()
+  return x && !/[<>]/.test(x) && !/^(your|todo|changeme|xxx)/i.test(x) ? x : ''
+}
+const HAS_LOGIN = () => Boolean(real(process.env.PAG_APP_EMAIL) && real(process.env.PAG_APP_PASSWORD))
 
 const WITNESS_PROMPT = (s, { specFile, cmd, appUrl, previous, hasLogin }) => `You are writing a WITNESS for ${s.issueKey}: a Playwright spec that drives the running app
 at ${appUrl} and FAILS because of the bug the ticket reports. You are NOT fixing anything. A separate

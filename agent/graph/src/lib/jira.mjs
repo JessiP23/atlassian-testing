@@ -16,14 +16,37 @@
 import { redact } from '../../../src/lib/redact.mjs'
 import { adfToText } from '../../../src/lib/adf.mjs'
 
+/**
+ * Secrets arrive pasted, and pasted values carry passengers: surrounding quotes, a trailing
+ * newline from the clipboard, a non-breaking space from a wiki page, a zero-width character from
+ * a chat client. Any one of them changes the Basic header and Jira answers 401 — which then reads
+ * as "wrong token" when the token itself is fine. So sanitise, and say so when it happened.
+ */
+const clean = (v) => String(v ?? '')
+  .replace(/[\u200B-\u200D\uFEFF]/g, '')     // zero-width
+  .replace(/\u00A0/g, ' ')                    // non-breaking space
+  .trim()
+  .replace(/^["'`]|["'`]$/g, '')               // wrapping quotes
+  .trim()
+
 export function jiraConfig() {
-  const url = (process.env.JIRA_URL || '').replace(/\/+$/, '')
-  const email = process.env.JIRA_EMAIL || process.env.PCA_JIRA_EMAIL
-  const token = process.env.JIRA_API_TOKEN || process.env.PCA_JIRA_API_TOKEN
+  const rawUrl = process.env.JIRA_URL || process.env.JIRA_BASE_URL || ''
+  const rawEmail = process.env.JIRA_EMAIL || process.env.PCA_JIRA_EMAIL || ''
+  const rawToken = process.env.JIRA_API_TOKEN || process.env.PCA_JIRA_API_TOKEN || ''
+  const url = clean(rawUrl).replace(/\/+$/, '')
+  const email = clean(rawEmail)
+  const token = clean(rawToken)
   if (!url || !email || !token) {
-    throw new Error('JIRA_URL, JIRA_EMAIL and JIRA_API_TOKEN are required (PCA_JIRA_* also accepted)')
+    throw new Error('JIRA_URL (or JIRA_BASE_URL), JIRA_EMAIL and JIRA_API_TOKEN are required')
   }
-  return { url, auth: 'Basic ' + Buffer.from(`${email}:${token}`).toString('base64') }
+  const dirty = [
+    rawUrl !== url && 'JIRA_URL', rawEmail !== email && 'JIRA_EMAIL', rawToken.trim() !== token && 'JIRA_API_TOKEN',
+  ].filter(Boolean)
+  return {
+    url, email, dirty,
+    host: (() => { try { return new URL(url).host } catch { return url } })(),
+    auth: 'Basic ' + Buffer.from(`${email}:${token}`).toString('base64'),
+  }
 }
 
 async function api(pathname, { method = 'GET', body } = {}) {
@@ -51,14 +74,27 @@ export async function probeIssue(key) {
     const r = await fetch(`${url}${p}`, { headers: { Authorization: auth, Accept: 'application/json' } })
     return { status: r.status, body: (await r.text()).slice(0, 300) }
   }
+  const { host, email, dirty } = jiraConfig()
   const me = await get('/rest/api/3/myself')
   const issue = await get(`/rest/api/3/issue/${encodeURIComponent(key)}`)
+  const where = `site ${host} as ${email}`
   let verdict
-  if (me.status === 401) verdict = 'token rejected — JIRA_EMAIL/JIRA_API_TOKEN wrong, or the token was revoked'
-  else if (me.status !== 200) verdict = `cannot identify the token holder (myself -> ${me.status})`
+  if (me.status === 401) {
+    verdict = [
+      `Jira rejected the credentials (401 on /myself) — ${where}.`,
+      'Check, in this order:',
+      `  1. the SITE: does ${host} own ${key}? A key from another Jira site cannot be read here.`,
+      '  2. the EMAIL: it must be the Atlassian account the API token was created under.',
+      '  3. the TOKEN: create a fresh one at id.atlassian.com/manage-profile/security/api-tokens',
+      '     and paste it with NO quotes, NO spaces and NO trailing newline.',
+      dirty.length ? `     (note: ${dirty.join(', ')} had quotes/whitespace, which was stripped before this call)` : '',
+    ].filter(Boolean).join('\n')
+  } else if (me.status !== 200) verdict = `cannot identify the token holder (myself -> ${me.status}) on ${where}`
   else if (issue.status === 200) verdict = 'readable'
-  else if (issue.status === 404) verdict = `token authenticates fine, but ${key} is not readable by it — either the key does not exist, or this user lacks Browse Projects on that project (Jira returns 404, not 403, for both)`
-  else verdict = `issue -> ${issue.status}`
+  else if (issue.status === 404) {
+    verdict = `the token works on ${where}, but ${key} is not readable by it — either that key does not exist on this site, ` +
+      'or this user lacks Browse Projects on its project (Jira answers 404, not 403, for both).'
+  } else verdict = `issue -> ${issue.status} on ${where}`
   return { me: me.status, issue: issue.status, verdict, body: issue.body }
 }
 

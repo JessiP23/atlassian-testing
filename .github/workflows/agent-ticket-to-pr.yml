@@ -115,6 +115,11 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # Cheapest possible failure: check the ticket is readable before a model runs. A wrong site or
+      # a pasted-with-quotes token is the most common first-run problem and it costs $0 to catch.
+      - name: Jira reachability
+        run: node agent/graph/bin/jira-probe.mjs "$ISSUE_KEY"
+
       - name: Run the agent
         id: agent
         env:
@@ -131,7 +136,9 @@ jobs:
 
       - name: Job summary — timeline, evidence, PR body
         if: always()
+        continue-on-error: true
         run: |
+          set +e
           RUN_DIR="${{ steps.agent.outputs.run_dir }}"
           [ -n "$RUN_DIR" ] && [ -d "$RUN_DIR" ] || { echo "no run folder (the agent failed before tracing)" >> "$GITHUB_STEP_SUMMARY"; exit 0; }
           {
@@ -146,6 +153,7 @@ jobs:
               [ -f "$f" ] && { echo; echo "<details><summary>$(basename "$f")</summary>"; echo; echo '```'; tail -40 "$f"; echo '```'; echo "</details>"; }
             done
           } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
 
       - name: Keep the run folder (screenshots, video, diff, logs)
         if: always()
