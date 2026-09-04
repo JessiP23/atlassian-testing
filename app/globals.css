@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* KAN-6: `dark:` utilities follow class="dark" on <html> so the toggle drives them, instead of
+   only following the OS media query. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -12,11 +16,18 @@
   --font-mono: var(--font-geist-mono);
 }
 
+/* Still the default for a visitor who has made no choice; class="light" opts out. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not(.light) {
     --background: #0a0a0a;
     --foreground: #ededed;
   }
+}
+
+/* Last, so an explicit choice wins over the media query. */
+:root.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
 }
 
 body {
