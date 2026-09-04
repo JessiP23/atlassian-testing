@@ -205,12 +205,14 @@ const graph = buildGraph({ budget, checkpointer: new MemorySaver(), trace, dryRu
 const t0 = Date.now()
 let final = {}
 let crashed = null
+let lastNode = 'start'      // so a crash can say WHERE, instead of 'unknown'
 try {
   for await (const chunk of await graph.stream(
     { issueKey, repo, baseBranch, prTargetBranch, baseSha, branchName: `${process.env.PAG_BRANCH_PREFIX || 'agent/'}${issueKey}-${slug}` },
     { configurable: { thread_id: `${issueKey}-${baseSha.slice(0, 7)}` }, recursionLimit: 40, streamMode: 'updates' }
   )) {
     for (const [node, update] of Object.entries(chunk)) {
+      lastNode = node
       console.log(`  ▸ ${node.padEnd(9)}  $${budget.report().spent.toFixed(4)}  ${((Date.now() - t0) / 1000).toFixed(0)}s`)
       if (node === 'locate' && update.located) for (const p of update.located) console.log(`      ${p.path}`)
       if (node === 'planning' && update.plan) console.log(`      impactedFiles: ${update.plan.impactedFiles?.join(', ')}`)
@@ -226,7 +228,14 @@ try {
   // Bedrock 503 with a bare stack trace: no timeline, no artifact worth reading, exit 1 from an
   // unhandled rejection. A throw is now just another terminal outcome — recorded, summarised, and
   // exited with the refusal code so the workflow's summary and artifact steps still run.
-  crashed = { at: 'unknown', reason: err?.name || 'node_threw', detail: String(err?.message || err).slice(0, 2000) }
+  // `err.name` is 'Error' for almost everything thrown by hand, so "refused at unknown: Error" was
+  // the entire report on a crash. The first line of the message is the part a human can act on.
+  const first = String(err?.message || err).split('\n')[0]
+  crashed = {
+    at: lastNode,
+    reason: err?.name && err.name !== 'Error' ? err.name : (first.slice(0, 70) || 'node_threw'),
+    detail: String(err?.message || err).slice(0, 2000),
+  }
   final = { ...final, refusal: crashed }
   console.error(`\n  CRASHED: ${crashed.reason}\n  ${crashed.detail}\n`)
   trace.note('ci', `CRASHED ${crashed.reason}: ${crashed.detail}`)

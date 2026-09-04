@@ -82,13 +82,16 @@ export async function converse({ model, system, user, maxTokens = 4096, json = f
     try {
       const res = await client.send(new ConverseCommand(req))
       const text = (res.output?.message?.content || []).map((c) => c.text || '').join('').trim()
+      // 'max_tokens' means the answer was CUT OFF, not that the model answered badly. Callers that
+      // parse the output need to know the difference — see converseJson.
+      const stopReason = res.stopReason || ''
       const inTok = res.usage?.inputTokens ?? 0
       const outTok = res.usage?.outputTokens ?? 0
       usage.inputTokens += inTok; usage.outputTokens += outTok; usage.calls++
       resolved.set(model, req.modelId)
       // Empty text means the output budget went on hidden reasoning: inflate and retry, same id.
       if (!text && attempt < ATTEMPTS - 1) { req.inferenceConfig.maxTokens = budget * 2; continue }
-      return { text, inTok, outTok }
+      return { text, inTok, outTok, stopReason }
     } catch (err) {
       last = err
       const name = err?.name || ''
@@ -109,16 +112,65 @@ export async function converse({ model, system, user, maxTokens = 4096, json = f
   )
 }
 
-/** Converse + strict JSON parse. Retries ONCE unconstrained, then gives up honestly. */
-export async function converseJson({ model, system, user, maxTokens }) {
+/**
+ * A JSON body that failed to parse: was it cut off, or was it wrong?
+ *
+ * `stopReason` answers this authoritatively, but not every path reports one, so this is the
+ * fallback: a truncated object still has unclosed braces, brackets, or a dangling string.
+ */
+export function looksTruncated(body) {
+  const b = String(body || '')
+  if (!b) return false
+  let depth = 0, inStr = false, esc = false
+  for (const ch of b) {
+    if (esc) { esc = false; continue }
+    if (ch === '\\') { esc = true; continue }
+    if (ch === '"') { inStr = !inStr; continue }
+    if (inStr) continue
+    if (ch === '{' || ch === '[') depth++
+    else if (ch === '}' || ch === ']') depth--
+  }
+  return inStr || depth > 0
+}
+
+/**
+ * Converse + strict JSON parse.
+ *
+ * WHY THIS GREW TEETH: on ESI2-3393 the `planning` node crashed with "did not return JSON" while
+ * the body it printed was perfectly good JSON — cut off mid-sentence inside a `steps` string. The
+ * model had hit its 4096-token output cap. Two separate faults made that a dead run rather than a
+ * retry: nothing looked at `stopReason`, so a truncation was diagnosed as a malformed answer; and
+ * the one retry reused the SAME maxTokens, so it truncated in exactly the same place.
+ *
+ * Now: a truncated answer retries with a much larger budget, a malformed one retries once as
+ * before, and the final error says which of the two it was.
+ */
+export async function converseJson({ model, system, user, maxTokens = 4096 }) {
   const sys = `${system}\n\nRespond with ONLY a single JSON object. No prose, no markdown fence.`
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const { text, inTok, outTok } = await converse({ model, system: sys, user, maxTokens })
+  const CEILING = Number(process.env.PAG_JSON_MAX_TOKENS || 16384)
+  let budget = maxTokens
+  let lastBody = '', truncated = false
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { text, inTok, outTok, stopReason } = await converse({ model, system: sys, user, maxTokens: budget })
     const body = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
     try {
       return { data: JSON.parse(body), inTok, outTok }
     } catch {
-      if (attempt === 1) throw new Error(`converseJson: ${model} did not return JSON: ${body.slice(0, 300)}`)
+      lastBody = body
+      truncated = stopReason === 'max_tokens' || looksTruncated(body)
+      if (truncated && budget < CEILING) {
+        budget = Math.min(budget * 3, CEILING)
+        console.error(`      ${model} hit its output limit — retrying with maxTokens=${budget}`)
+        continue
+      }
+      if (attempt >= 1) break
     }
   }
+
+  throw new Error(truncated
+    ? `converseJson: ${model} ran out of output tokens even at maxTokens=${budget}. The answer was cut off, `
+      + `not malformed. Raise PAG_JSON_MAX_TOKENS, or the prompt is asking for more than it needs.\n`
+      + `Last ${lastBody.length} chars ended: …${lastBody.slice(-160)}`
+    : `converseJson: ${model} did not return JSON: ${lastBody.slice(0, 300)}`)
 }

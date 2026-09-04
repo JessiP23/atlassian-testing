@@ -1,0 +1,29 @@
+fix(bedrock): a cut-off answer is not a malformed one
+
+ESI2-3393 crashed at `planning` with "did not return JSON" while printing JSON that was perfectly
+well formed — and cut off mid-sentence inside a `steps` string. Haiku had hit its 4096-token output
+cap on a plan for a 6,901-file monorepo. Two faults turned a retryable truncation into a dead run:
+
+  Nothing looked at `stopReason`. Converse knew the answer had been cut off ('max_tokens') and threw
+  that away, so the caller diagnosed a malformed answer. Those two need opposite responses — a
+  bigger budget versus a different prompt — and the message sent the reader to the wrong one.
+
+  The one retry reused the SAME maxTokens, so it truncated in exactly the same place. The comment
+  claimed it retried "unconstrained"; it did not.
+
+converse now returns stopReason. converseJson retries a truncated answer with three times the
+budget (up to PAG_JSON_MAX_TOKENS, default 16384), retries a malformed one once as before, and its
+final error says which of the two happened and shows the last 160 characters, because "it ended
+here" is what tells you it was cut off.
+
+`looksTruncated` is the fallback for paths that report no stopReason: it walks the body tracking
+string state and container depth, so an unclosed brace or a dangling string reads as truncation
+while prose reads as malformed. Six tests, including the real ESI2-3393 body and the cases that
+would fool a naive brace count — braces inside strings, escaped quotes, a trailing backslash.
+
+Also: a crashed run said "refused at unknown: Error", which is the whole report. `err.name` is
+'Error' for almost everything thrown by hand, so the reason now falls back to the first line of the
+message, and `at` carries the node that was actually running instead of 'unknown'.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T
