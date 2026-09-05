@@ -178,6 +178,19 @@ try {
   else warn('no unit test runner in this repo', 'the browser witness is the only evidence rung; the plan will not ask for unit tests')
 } catch (e) { bad('profile', e.message) }
 
+// The repo's CI installs the runtime named in .nvmrc. A gate on a different major is not measuring
+// what Actions will measure — ESI2-3393 was green on every local gate and red in CI with an
+// identical tree.
+{
+  const want = (() => { try { return fs.readFileSync(path.join(repo, '.nvmrc'), 'utf8').trim().replace(/^v/, '') } catch { return null } })()
+  const major = (v) => String(v).replace(/^v/, '').split('.')[0]
+  if (!want) ok('no .nvmrc in this repo', 'nothing pins the runtime, so there is no version for the gate to match')
+  else if (major(want) === major(process.version)) ok(`node matches .nvmrc (v${want})`, `running ${process.version}`)
+  else warn(`node ${process.version} but .nvmrc pins v${want}`,
+    'CI installs the .nvmrc version, so a green gate here is not proof of a green CI',
+    `nvm use   # in ${repo}`)
+}
+
 for (const [cmd, args, label, fix] of [
   ['node', ['--version'], 'node', ''],
   ['claude', ['--version'], 'claude-code CLI', 'npm i -g @anthropic-ai/claude-code — the patch node shells out to it'],

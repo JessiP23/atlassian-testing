@@ -63,6 +63,23 @@ const profile = loadProfile(repo)
 const { stdout: shaOut } = await exec('git', ['rev-parse', 'HEAD'], { cwd: repo })
 const baseSha = shaOut.trim()
 
+// ---- 0b. the runtime this repo's CI pins ------------------------------------------------------
+//
+// ESI2-3393 opened green on every local gate and went red in Actions. Everything the gate measures
+// was identical; the RUNTIME was not. `.nvmrc` is what the repo's own workflows install, so a gate
+// running a different major is not measuring what CI will measure. Warn, do not refuse: the mismatch
+// is usually harmless, and refusing would strand a run over a version the user cannot change mid-flight.
+{
+  const want = (() => { try { return fs.readFileSync(path.join(repo, '.nvmrc'), 'utf8').trim().replace(/^v/, '') } catch { return null } })()
+  if (want) {
+    const major = (v) => String(v).replace(/^v/, '').split('.')[0]
+    if (major(want) !== major(process.version)) {
+      console.log(`  node: running ${process.version}, but this repo's .nvmrc pins v${want} — CI installs v${want}.`)
+      console.log(`        A gate green here is not proof of a CI green. \`nvm use\` in ${path.basename(repo)} before the run.`)
+    }
+  }
+}
+
 // ---- 1. the context tree, from THIS checkout -------------------------------------------------
 if (!has('skip-index')) {
   fs.mkdirSync(PAR, { recursive: true })
