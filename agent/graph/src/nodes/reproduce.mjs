@@ -482,7 +482,7 @@ async function witness(s, { budget, onProgress, appUrl, note = () => {} }) {
     let mcpConfig = null
     if (browsermcp.mcpEnabled() && HAS_LOGIN()) {
       const statePath = await browsermcp.loginState({ appUrl, onProgress })
-      mcpConfig = browsermcp.writeConfig({ statePath, outDir: path.join(path.dirname(specFile), 'authoring') })
+      mcpConfig = browsermcp.writeConfig({ statePath })
       if (mcpConfig) onProgress(`authoring browser: on${statePath ? ', already signed in' : ' (signed out)'}`)
     }
 

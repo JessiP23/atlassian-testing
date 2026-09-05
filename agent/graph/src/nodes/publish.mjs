@@ -206,9 +206,20 @@ async function pushEvidence({ repo, remote, slug, issueKey, runId }) {
   const dest = path.join(tmp, issueKey, runId)
   fs.mkdirSync(dest, { recursive: true })
   const keep = /\.(png|gif|webm|zip|log|mjs|ts)$/
-  for (const f of fs.readdirSync(src)) if (keep.test(f) && fs.statSync(path.join(src, f)).isFile()) fs.copyFileSync(path.join(src, f), path.join(dest, f))
+  for (const f of fs.readdirSync(src)) {
+    try { if (keep.test(f) && fs.statSync(path.join(src, f)).isFile()) fs.copyFileSync(path.join(src, f), path.join(dest, f)) } catch { /* skip */ }
+  }
+  // REGULAR FILES ONLY. The top-level loop above already checks; this one did not, and a unix
+  // socket left in evidence/witness/ by an MCP browser made copyFileSync throw ENOTSUP, which
+  // abandoned the entire upload — so a PR that had always carried the ticket screenshots suddenly
+  // carried none. One bad entry must never cost the whole evidence set.
   const wdir = path.join(src, 'witness')
-  if (fs.existsSync(wdir)) for (const f of fs.readdirSync(wdir)) fs.copyFileSync(path.join(wdir, f), path.join(dest, f))
+  if (fs.existsSync(wdir)) {
+    for (const f of fs.readdirSync(wdir)) {
+      const from = path.join(wdir, f)
+      try { if (fs.statSync(from).isFile() && keep.test(f)) fs.copyFileSync(from, path.join(dest, f)) } catch { /* skip */ }
+    }
+  }
   await g(['add', '-A', '--', path.join(issueKey, runId)])
   // Nothing to publish is a normal outcome (no repro, no witness, termshot disabled), and `git
   // commit` exits 1 on an empty index. Reporting that as "evidence branch failed" sent ESI2-3406's
