@@ -153,6 +153,25 @@ export async function probeIssue(key) {
   return { me: me.status, issue: issue.status, base: usedBase, kind, verdict, body: issue.body }
 }
 
+/**
+ * Is this comment one the agent wrote itself?
+ *
+ * ESI2-3393 refused at intake with "a fix was already shipped" — citing seven draft PRs that the
+ * agent had opened on its own earlier runs. Its own footprints, read back as somebody else's work.
+ * Every run comments on the ticket, so this feedback loop grows with every attempt and poisons
+ * every judgement intake makes about history.
+ *
+ * The comments are posted under the OPERATOR's Jira account, so the author field cannot separate
+ * them. The signature the agent writes can, and it is a line this codebase controls.
+ */
+export function isAgentComment(body, agent) {
+  // Guarded because `comments.filter(isAgentComment)` is the obvious call and passes the array
+  // INDEX as the second argument, which would silently match nothing.
+  const name = typeof agent === 'string' && agent ? agent : (process.env.PAG_AGENT_NAME || 'panda-agent')
+  const t = String(body || '')
+  return t.includes(`${name} opened a`) || t.includes(`${name} could not`) || t.includes(`${name} refused`)
+}
+
 /** One issue, redacted, comments included. Returns null when unreadable rather than throwing. */
 export async function fetchIssue(key) {
   let raw
@@ -174,10 +193,13 @@ export async function fetchIssue(key) {
     status: f.status?.name || '',
     labels: f.labels || [],
     assignee: f.assignee?.displayName || null,
-    comments: (f.comment?.comments || []).slice(0, 10).map((c) => ({
-      author: c.author?.displayName || 'unknown',
-      body: clean(adfToText(c.body)),
-    })),
+    // The agent's own PR notices are filtered out here, at the boundary, so no node can mistake
+    // them for engineering history. `agentComments` keeps the count for the run log.
+    comments: (f.comment?.comments || [])
+      .map((c) => ({ author: c.author?.displayName || 'unknown', body: clean(adfToText(c.body)) }))
+      .filter((c) => !isAgentComment(c.body))
+      .slice(0, 10),
+    agentComments: (f.comment?.comments || []).filter((c) => isAgentComment(adfToText(c.body))).length,
     attachments: (f.attachment || []).map((a) => ({ id: a.id, filename: a.filename, mimeType: a.mimeType, size: a.size, content: a.content })),
   }
 }

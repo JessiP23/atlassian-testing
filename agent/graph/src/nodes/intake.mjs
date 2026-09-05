@@ -32,11 +32,15 @@ must fail. Fill it from the navigation steps and the screenshots:
   browser), "import-template" (a validation rule shipped to the import widget), "backend" (a lambda
   or library that runs after the click), or "unknown". Say why in one clause.
 
-reopened: read the comments. If they show a fix was shipped for this ticket (a PR, a deploy, a
-"confirmed working" from QA) and a LATER comment says the customer still sees the issue, this is a
-re-open of a previous attempt, not a fresh bug. Set reopened true, name the earlier ticket or PR in
-priorFix, and set confidence "low" — a re-open needs the engineer who shipped the first fix, not a
-second guess from a different starting point.
+reopened: a NARROW test, and all three parts must hold:
+  1. a comment describes a fix that actually LANDED — merged, deployed, released, "fixed in <ticket>";
+  2. someone confirmed it was working (QA, the reporter, an engineer);
+  3. a LATER comment says the customer still sees the issue.
+An open or draft PR is NOT a shipped fix. A root-cause analysis is NOT a shipped fix. A list of
+attempts with no merge is NOT a shipped fix. If any of the three is missing, reopened is false —
+say what you saw in riskNotes instead. When all three hold, set reopened true, name the shipped fix
+in priorFix, and set confidence "low": a re-open needs the engineer who shipped it, not a second
+independent guess.
 
 Return JSON:
 {"summary":str,"acceptanceCriteria":[str],"constraints":[str],"nonGoals":[str],
@@ -66,6 +70,7 @@ export function intakeNode({ budget }) {
     // The screenshots. Bounded (6 images, 2 MB each); a failed download is a missing image, not a
     // failed run. See fetchAttachmentImages for why this exists.
     const images = await fetchAttachmentImages(ticket).catch(() => [])
+    if (ticket.agentComments) console.error(`      ignoring ${ticket.agentComments} comment(s) this agent wrote on earlier runs`)
 
     // Keep them. They are the only picture of the bug AS REPORTED, and on a ticket where the agent
     // cannot drive the UI they are the only picture at all. Saved into evidence/ so pushEvidence
@@ -90,6 +95,7 @@ export function intakeNode({ budget }) {
       '',
       'COMMENTS:',
       ...(ticket.comments || []).slice(0, 8).map((c, i) => `[${i + 1}] ${c.author}: ${c.body.slice(0, 1500)}`),
+      ...(ticket.comments || []).length ? [] : ['(no human comments on this ticket)'],
       '',
       images.length
         ? `SCREENSHOTS (${images.length}, attached in order): ${images.map((i) => i.filename).join(', ')}`
