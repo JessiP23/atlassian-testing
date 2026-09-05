@@ -35,6 +35,9 @@ import { loadProfile } from '../../profiles/index.mjs'
 
 const exec = promisify(execFile)
 const ATTEMPTS = Number(process.env.PAG_REPRO_ATTEMPTS || 2)
+// The witness gets one shot, and never the whole phase — see the note where it is used.
+const WITNESS_ATTEMPTS = Number(process.env.PAG_WITNESS_ATTEMPTS || 1)
+const FALLBACK_FLOOR_MS = Number(process.env.PAG_FALLBACK_FLOOR_MS || 150_000)
 const REPRO_BUDGET = Number(process.env.PAG_REPRO_BUDGET || 1.5)
 // This phase's clock is now ONE number owned by lib/budget.mjs (PHASES.reproduce), not a second
 // ceiling maintained here. On KAN-6 the witness iterated for 566s of a 1200s run (oklch colours,
@@ -60,7 +63,7 @@ const real = (v) => {
 }
 const HAS_LOGIN = () => Boolean(real(process.env.PAG_APP_EMAIL) && real(process.env.PAG_APP_PASSWORD))
 
-const WITNESS_PROMPT = (s, { specFile, cmd, appUrl, previous, hasLogin }) => `You are writing a WITNESS for ${s.issueKey}: a Playwright spec that drives the running app
+const WITNESS_PROMPT = (s, { specFile, cmd, appUrl, previous, hasLogin, timeMs = 300_000 }) => `You are writing a WITNESS for ${s.issueKey}: a Playwright spec that drives the running app
 at ${appUrl} and FAILS because of the bug the ticket reports. You are NOT fixing anything. A separate
 step fixes the code; the app hot-reloads; your spec must then pass unchanged.
 
@@ -105,8 +108,12 @@ ${hasLogin
   settings. Keep it to ONE test.
 - Do not edit any file under ${s.repo}. Do not commit.
 
-## Run it with exactly this command
+## Run it with exactly this command — copy it verbatim, do not reconstruct it
     ${cmd}
+It is absolute and sets both env vars the config reads; a shortened or relative version writes its
+output where the run cannot collect it, and reinventing it is how the previous attempt spent its
+whole clock. You have about ${Math.round(timeMs / 1000)}s TOTAL for reading, writing and two runs of
+that command, so read only what you need for the route and the selectors.
 
 ## Protocol — pass first, then invert
 1. Write the test so its final assertion describes the CURRENT (wrong) behaviour and it PASSES against
@@ -389,15 +396,28 @@ async function witness(s, { budget, onProgress, appUrl }) {
   const tier = tierFor('repro')
   const cmd = witnessCommand(specFile)
   let previous = ''
-  for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= WITNESS_ATTEMPTS; attempt++) {
+    // ONE attempt, and it may not eat the phase.
+    //
+    // ESI2-3406: two witness attempts of 180s each. Both died on `wall-clock budget exhausted`
+    // while the model was still reading files — a witness has to log in, navigate, and run
+    // Playwright TWICE (pass, then inverted), which does not fit in three minutes on an app this
+    // size. The component fallback then got `skipped: 0s left`, so the run produced no evidence at
+    // all and `patch` re-did the whole diagnosis for $3.47.
+    //
+    // So: the witness gets everything except a floor reserved for the fallback rung, once. If it
+    // cannot manage it in that, a second identical attempt will not either — the fallback will.
     const allowance = Math.min(REPRO_BUDGET, budget.availableFor('repro'))
-    const timeMs = attemptShare(budget, attempt)
-    if (allowance < 0.3 || timeMs < 90_000) return null
+    const timeMs = Math.max(0, budget.phaseTimeFor('reproduce', 1) - FALLBACK_FLOOR_MS)
+    if (allowance < 0.3 || timeMs < 120_000) {
+      onProgress(`witness skipped: ${(timeMs / 1000).toFixed(0)}s available after reserving ${FALLBACK_FLOOR_MS / 1000}s for the unit rung — not enough to sign in, navigate and run it twice`)
+      return null
+    }
 
     onProgress(`witness attempt ${attempt}/${ATTEMPTS} -> ${specFile}`)
     const r = await runClaude({
       cwd: s.repo, model: tier.model, budgetUsd: allowance, timeoutMs: timeMs, onProgress,
-      prompt: WITNESS_PROMPT(s, { specFile, cmd, appUrl, previous, hasLogin: HAS_LOGIN() }),
+      prompt: WITNESS_PROMPT(s, { specFile, cmd, appUrl, previous, hasLogin: HAS_LOGIN(), timeMs }),
     })
     budget.charge('repro', r.cost, { model: tier.model, attempt, subtype: r.subtype, exit: r.code, rung: 'e2e' })
 
