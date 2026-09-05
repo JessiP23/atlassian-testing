@@ -144,6 +144,29 @@ export function looksTruncated(body) {
 }
 
 /**
+ * Salvage JSON the model got ALMOST right.
+ *
+ * The failure this exists for: a plan step that quotes a regular expression — "the pattern
+ * `(\\.\\d{1,16})?` allows 16 decimal places" — puts a lone backslash inside a JSON string. `\\d` is
+ * not a valid JSON escape, so the entire object is unparseable however many tokens it gets. On
+ * ESI2-3393 that killed the run twice, and it looked like truncation because the error printed only
+ * the first 300 characters.
+ *
+ * Two repairs, both conservative: double any backslash that is not already a legal JSON escape, and
+ * drop trailing commas. Anything else is left to fail — guessing at broken JSON is how you get a
+ * plan that parses and means something the model never said.
+ */
+export function repairJson(body) {
+  // The alternation matters: a VALID escape pair is consumed as a unit, so the `.` after `\\\\` is
+  // never mistaken for the target of the second backslash. A naive /\\\\(?!["\\\\/bfnrtu])/ scans left
+  // to right, "fixes" the second half of a legal pair, and produces JSON that is broken differently.
+  const fixed = String(body)
+    .replace(/\\(?:(["\\/bfnrtu]|u[0-9a-fA-F]{4})|(.))/gs, (m, ok, lone) => (ok ? m : `\\\\${lone}`))
+    .replace(/,(\s*[}\]])/g, '$1')             // trailing comma before } or ]
+  try { return JSON.parse(fixed) } catch { return null }
+}
+
+/**
  * Converse + strict JSON parse.
  *
  * WHY THIS GREW TEETH: on ESI2-3393 the `planning` node crashed with "did not return JSON" while
@@ -159,22 +182,44 @@ export async function converseJson({ model, system, user, maxTokens = 4096 }) {
   const sys = `${system}\n\nRespond with ONLY a single JSON object. No prose, no markdown fence.`
   const CEILING = Number(process.env.PAG_JSON_MAX_TOKENS || 16384)
   let budget = maxTokens
-  let lastBody = '', truncated = false
+  let lastBody = '', lastError = '', truncated = false, note = ''
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    const { text, inTok, outTok, stopReason } = await converse({ model, system: sys, user, maxTokens: budget })
+    const { text, inTok, outTok, stopReason } = await converse({ model, system: sys, user: user + note, maxTokens: budget })
     const body = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
     try {
       return { data: JSON.parse(body), inTok, outTok }
-    } catch {
+    } catch (err) {
       lastBody = body
+      lastError = String(err.message || err)
       truncated = stopReason === 'max_tokens' || looksTruncated(body)
+
+      // Cut off: the answer was fine as far as it went, so give it room and ask again.
       if (truncated && budget < CEILING) {
         budget = Math.min(budget * 3, CEILING)
         console.error(`      ${model} hit its output limit — retrying with maxTokens=${budget}`)
         continue
       }
-      if (attempt >= 1) break
+
+      // Complete but not valid JSON. Try the free deterministic repair before paying for another
+      // call — an unescaped backslash in a quoted regex is the common case and it is mechanical.
+      if (!truncated) {
+        const salvaged = repairJson(body)
+        if (salvaged) {
+          console.error(`      ${model} returned invalid JSON (${lastError.slice(0, 60)}) — repaired it`)
+          return { data: salvaged, inTok, outTok }
+        }
+      }
+
+      // Repair failed. One more call, this time telling it exactly what broke — a model that is
+      // shown its own parse error fixes it far more reliably than one asked again in the same words.
+      if (attempt < 2) {
+        note = `\n\nYour previous reply could not be parsed: ${lastError}.\nReturn valid JSON this time. `
+          + 'If you need to mention a regular expression or a Windows path, describe it in words — a '
+          + 'lone backslash inside a JSON string is invalid and will break the whole reply.'
+        continue
+      }
+      break
     }
   }
 
@@ -182,5 +227,7 @@ export async function converseJson({ model, system, user, maxTokens = 4096 }) {
     ? `converseJson: ${model} ran out of output tokens even at maxTokens=${budget}. The answer was cut off, `
       + `not malformed. Raise PAG_JSON_MAX_TOKENS, or the prompt is asking for more than it needs.\n`
       + `Last ${lastBody.length} chars ended: …${lastBody.slice(-160)}`
-    : `converseJson: ${model} did not return JSON: ${lastBody.slice(0, 300)}`)
+    : `converseJson: ${model} returned ${lastBody.length} chars that are not valid JSON, and the `
+      + `repair did not help. Parser said: ${lastError}\n`
+      + `--- body ---\n${lastBody.slice(0, 1200)}${lastBody.length > 1200 ? `\n… (${lastBody.length - 1200} more)` : ''}`)
 }
