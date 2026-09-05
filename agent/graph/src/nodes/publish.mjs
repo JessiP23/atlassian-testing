@@ -197,10 +197,17 @@ async function remoteBranchOwner({ repo, remote, branch, baseSha }) {
  * cheapest thing in the system, not the most dangerous.
  */
 async function createOrUpdatePr({ repo, allowed, branch, base, title, body, draft = true, onProgress = () => {} }) {
+  // --base matters as much as --head. Without it, `gh pr list --head agent/ESI2-3393-fix` returns
+  // the PR targeting main, so the SECOND PR (the one meant for qa) found that one, decided it
+  // already existed, and overwrote its body with the "lower-environment copy" text. One PR, wrong
+  // description, and the log claiming two — which is what ESI2-3393 actually produced.
   const { stdout: found } = await exec('gh', [
-    'pr', 'list', '--repo', allowed, '--head', branch, '--state', 'open', '--json', 'number,url', '--limit', '1',
+    'pr', 'list', '--repo', allowed, '--head', branch, '--base', base, '--state', 'open',
+    '--json', 'number,url,baseRefName', '--limit', '5',
   ], { cwd: repo }).catch(() => ({ stdout: '[]' }))
-  const open = (() => { try { return JSON.parse(found)[0] } catch { return null } })()
+  const open = (() => {
+    try { return JSON.parse(found).find((p) => p.baseRefName === base) || null } catch { return null }
+  })()
 
   if (open?.number) {
     onProgress(`PR #${open.number} is already open for ${branch} — updating it in place`)

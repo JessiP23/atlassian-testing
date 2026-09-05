@@ -58,6 +58,23 @@ if (!fs.existsSync(path.join(repo, '.git'))) {
   console.log('  created')
 } else {
   console.log(`worktree exists: ${repo}`)
+
+  // PUT IT BACK ON THE BASE. A worktree is disposable by design, and leaving the previous
+  // ticket's patch in it silently destroys the next run's premise: on ESI2-3393 the reproduce node
+  // reported "the worktree is not in the unpatched state the protocol assumes" and had to revert
+  // format-filter-value.ts by hand, because the fix from the previous run was still applied. A
+  // "red before the fix" measured against a tree that already has the fix is not evidence of
+  // anything. Reset is the default here for exactly that reason; --no-reset opts out.
+  if (!argv.includes('--no-reset')) {
+    await exec('git', ['fetch', '--quiet', 'origin', base], { cwd: repo }).catch(() => {})
+    const { stdout: dirty } = await exec('git', ['status', '--porcelain'], { cwd: repo, maxBuffer: 1 << 24 })
+    const lines = dirty.split('\n').filter(Boolean)
+    if (lines.length) console.log(`  discarding ${lines.length} leftover change(s) from a previous run: ${lines.slice(0, 3).map((l) => l.slice(3)).join(', ')}${lines.length > 3 ? ' …' : ''}`)
+    await exec('git', ['reset', '--hard', '--quiet', `origin/${base}`], { cwd: repo })
+    await exec('git', ['clean', '-qfd'], { cwd: repo }).catch(() => {})
+    const { stdout: at } = await exec('git', ['rev-parse', '--short', 'HEAD'], { cwd: repo })
+    console.log(`  reset to origin/${base} @ ${at.trim()}`)
+  }
 }
 
 // ---- 2. lockfile agreement -------------------------------------------------------------------

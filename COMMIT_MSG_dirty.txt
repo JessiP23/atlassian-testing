@@ -1,0 +1,22 @@
+fix(worktree,publish): reset the worktree between runs, and stop the qa PR eating the main one
+
+ESI2-3393 shipped a PR to AssetPandaLLC/pioneer in 3m31s for $1.19. Two defects in that run, both
+of which produce a confident, wrong result rather than a visible failure.
+
+THE WORKTREE WAS NOT ON THE BASE.  `prepare-worktree.mjs` creates the worktree and gives it
+node_modules; it never put it back on origin/<base>. So the previous ticket's patch was still
+applied, and the reproduce node said so outright — "the worktree is not in the unpatched state the
+protocol assumes" — then reverted format-filter-value.ts by hand and carried on. A test proven
+"red before the fix" against a tree that already HAS the fix is not evidence of anything, and
+nothing downstream can tell the difference. It now fetches and hard-resets to origin/<base> by
+default, printing what it discarded; --no-reset opts out. A worktree is disposable by design, which
+is the whole reason the agent works in one.
+
+THE SECOND PR OVERWROTE THE FIRST.  `gh pr list --head <branch>` ignores the base branch, so the
+qa PR looked for its own and found the one targeting main, concluded it already existed, and
+updated it — replacing a correct description with "Lower-environment copy … targeting qa". The log
+then reported two PRs at the same number: `also opened .../pull/15809 -> qa`. One PR, wrong body,
+and a line that says the feature worked. Now filtered on --base and matched on baseRefName.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T
