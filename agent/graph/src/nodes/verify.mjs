@@ -133,6 +133,19 @@ export function verifyNode({ budget, onProgress = () => {} } = {}) {
       onProgress(`repro GREEN on the patched tree${after ? ` — ${after.shots.length} screenshot(s), gif ${after.gif ? 'yes' : 'no'}` : ''}`)
     }
 
+    // ---- what CI's format:check will see, before the gate sees it ----------------------------
+    // pioneer runs `nx format:check` as its own workflow; the gate below is lint + test + build, so
+    // a one-space drift in a patched file opened a PR that was green here and red there (run 5,
+    // format-filter-value.test.ts). Prettier is deterministic and content-preserving: write it,
+    // don't check it, and there is nothing for repair to do. The frozen repro is excluded — it
+    // was formatted before its sha was taken, and touching it now would read as tampering.
+    const toFormat = (s.changed || []).filter((f) => f !== s.repro?.file && fs.existsSync(path.join(s.repo, f)))
+    if (toFormat.length) {
+      await exec('npx', ['--no-install', 'prettier', '--write', '--log-level', 'silent', ...toFormat], { cwd: s.repo, maxBuffer: 1 << 24, timeout: 120_000 })
+        .then(() => onProgress(`formatted ${toFormat.length} changed file(s) with the repo's prettier`))
+        .catch((e) => onProgress(`prettier skipped: ${String(e.message).split('\n')[0].slice(0, 80)}`))
+    }
+
     const scope = await scopeFor(s.repo, s.changed)
     if (!scope.plan.length) {
       return { scope, evidence, gate: { ok: false, target: 'scope', summary: 'no owning project for the changed files — cannot verify' } }

@@ -133,7 +133,6 @@ ${(s.spec.acceptanceCriteria || []).map((a, i) => `${i + 1}. ${a}`).join('\n')}
 
 ## Where the fix will go (read these to know what to exercise)
 ${s.plan.impactedFiles.map((f) => `- ${f}`).join('\n')}
-${(s.plan.newTests || []).length ? `\nThe plan expects tests pinning:\n${s.plan.newTests.map((t) => `- ${t.pins}`).join('\n')}` : ''}
 
 ## The ONE file you may create — exactly this path, nothing else
     ${specFile}
@@ -157,6 +156,11 @@ spec file (imports, mocks, describe/it naming).`}
    value the ticket complains about.
 3. Stop. Leave the file in its inverted (failing) state. Do not fix the code. Do not touch any other
    file. Do not commit.
+
+The assertion is about a VALUE the current code produces for the ticket's input — never about
+whether a function, export or module exists. Calling a symbol that is not on this commit (through
+\`?.\`, a cast, \`require\` in a try, or any other way) and asserting on \`undefined\` is not a
+reproduction of anything; it is a test that the fix has not been written yet, and it will be rejected.
 
 ## It must also pass this repo's lint
 The file is frozen the moment it goes red, so nothing can fix it afterwards — a lint error here
@@ -257,6 +261,30 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         continue
       }
 
+      // ---- red for the RIGHT reason -----------------------------------------------------------
+      //
+      // Run 5 on ESI2-3393 went red with `expect(mod.validateNumericDecimalPlaces?.(...)).toBe(true)`
+      // — a probe for a helper the PLAN intended to add, which does not exist on this commit, so
+      // the assertion received `undefined`. It passed step 1, inverted cleanly, went red → green
+      // through the whole run, and proved nothing about the bug: the patch that turned it green
+      // fixed the wrong file. A test that goes red because a symbol is missing is a test that the
+      // fix has not been written yet. Reject it here, while the spec is still this node's to edit.
+      // `?.(` is an optional CALL — the only reason to write one in a test is that the callee may not
+      // exist. Plain `?.` property access on a result is normal and is not flagged.
+      const specSrc = fs.readFileSync(path.join(s.repo, specFile), 'utf8')
+      if (/\?\.\(/.test(specSrc) || /is not a function|is not defined|has no exported member/.test(red.out)) {
+        previous = `Attempt ${attempt}: the test went red because it calls something that does not exist on this commit `
+          + '(an optional call, a cast, or a missing export), not because the code produced the wrong VALUE for the '
+          + "ticket's input. Assert on what the current code actually returns or throws for the ticket's example, "
+          + 'through the exports that exist today.'
+        onProgress('repro is red only because it probes a symbol that does not exist yet — not a reproduction')
+        if (attempt === ATTEMPTS) {
+          fs.rmSync(path.join(s.repo, specFile), { force: true })
+          return { repro: { status: 'none', reason: 'the only red the test could produce was a probe for a not-yet-written helper — that is not a reproduction of the symptom', rung } }
+        }
+        continue
+      }
+
       // ---- the spec must survive the repo's OWN lint, before it is frozen -------------------
       //
       // ESI2-3393 deadlocked here. The spec went red for exactly the right reason and found the
@@ -267,6 +295,10 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
       //
       // The freeze has to come AFTER the file is acceptable to the repo, not before. Right here
       // the spec is still this node's to edit, so lint it, hand the errors back, and try again.
+      // Prettier first, same reason: pioneer's CI runs `nx format:check` as its own workflow, and a
+      // spec frozen one space off fails it with nothing downstream allowed to touch the file.
+      // Deterministic and content-preserving, so the red run above still describes this file.
+      await exec('npx', ['--no-install', 'prettier', '--write', '--log-level', 'silent', specFile], { cwd: s.repo, timeout: 60_000 }).catch(() => {})
       const lint = await exec('npx', ['eslint', '--no-error-on-unmatched-pattern', specFile], { cwd: s.repo, maxBuffer: 1 << 24, timeout: 120_000 })
         .then(() => ({ ok: true, out: '' }))
         .catch((e) => ({ ok: false, out: `${e.stdout || ''}${e.stderr || ''}` }))
