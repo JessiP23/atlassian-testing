@@ -20,9 +20,15 @@ import { tierFor, estimateCost } from '../lib/models.mjs'
 import { addComment, transition } from '../lib/jira.mjs'
 import { formatFailures } from '../lib/gatelog.mjs'
 import { pairShots } from '../lib/evidence.mjs'
+import { termshot } from '../lib/termshot.mjs'
 
 const exec = promisify(execFile)
 const git = (repo, args) => exec('git', args, { cwd: repo, maxBuffer: 1 << 24 })
+
+/** A log the run already saved, in full — the excerpt is for the body, the file is for the image. */
+const readEvidence = (name) => {
+  try { return fs.readFileSync(path.join(process.env.PAG_RUN_DIR, 'evidence', name), 'utf8') } catch { return '' }
+}
 
 const SYSTEM = `Write the PR for a bug fix. Reviewers are busy engineers who did not read the ticket.
 
@@ -43,7 +49,7 @@ Return JSON: {"title":str,"body":str,"testNotes":str,"rolloutNotes":str,"manualS
  * log and the gate verdict are the runner's output, quoted. A reviewer who reads only this section
  * knows what was proven and what was not.
  */
-function evidenceBlock(s, budget, href = (f) => `evidence/${f}`) {
+export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal = null) {
   const r = s.repro
   const e = s.evidence
   const lines = ['## Evidence']
@@ -74,6 +80,19 @@ function evidenceBlock(s, budget, href = (f) => `evidence/${f}`) {
         r.before?.trace && `[before trace](${href(r.before.trace)})`, e.after?.trace && `[after trace](${href(e.after.trace)})`,
       ].filter(Boolean)
       if (links.length) lines.push(`Full video and Playwright traces: ${links.join(' · ')}`, '')
+    }
+    // The rendered terminal, when the evidence branch could host it. Text stays underneath either
+    // way — the image is what a reviewer looks at, the text is what they can copy and re-run.
+    if (terminal?.before || terminal?.after) {
+      lines.push(
+        `| \`${s.baseBranch}@${String(s.baseSha).slice(0, 7)}\` — before | after this patch |`,
+        '|---|---|',
+        `| ${terminal.before ? `![before](${href(terminal.before)})` : '_not captured_'} `
+          + `| ${terminal.after ? `![after](${href(terminal.after)})` : '_not captured_'} |`,
+        '',
+        'Same command, same test file, same commit for the left-hand run. The text below is the same output.',
+        '',
+      )
     }
     lines.push(
       `<details><summary>Before this patch (\`${s.baseBranch}@${String(s.baseSha).slice(0, 7)}\`) — FAIL</summary>`,
@@ -154,12 +173,24 @@ async function pushEvidence({ repo, remote, slug, issueKey, runId }) {
   return (f) => `https://github.com/${slug}/blob/${EVIDENCE_BRANCH}/${issueKey}/${runId}/${encodeURIComponent(f)}?raw=true`
 }
 
-/** Every `path.ts:123` the model cites must be a file in the diff — otherwise the claim is flagged, not trusted. */
+/**
+ * Every file the PR body NAMES must be a file in the diff.
+ *
+ * This used to check only `path.ts:123` citations. On ESI2-3393 every false statement in the body
+ * was a bare FILENAME instead: "The root cause was in `hasMoreDecimalsThanAllowed` in
+ * format-filter-value.ts" (a function the previous run had invented, still sitting in a dirty
+ * worktree), and "Added test in format-filter-value.test.ts" — a file the diff never touched. Both
+ * sailed through, because neither carried a line number.
+ *
+ * A path in a PR body is a claim about the diff. It gets checked like one.
+ */
 function citationCheck(body, changed) {
-  const cited = [...String(body).matchAll(/([\w./@-]+\.(?:[tj]sx?|graphql|json)):\d+/g)].map((m) => m[1])
-  const set = new Set(changed)
-  const bad = [...new Set(cited.filter((f) => ![...set].some((c) => c === f || c.endsWith('/' + f) || f.endsWith('/' + c))))]
-  return bad
+  const named = [...String(body).matchAll(/([\w./@-]+\.(?:[tj]sx?|graphql|json|css|scss|mjs|cjs))(?::\d+)?/g)].map((m) => m[1])
+  const set = [...new Set(changed)]
+  const same = (f) => set.some((c) => c === f || c.endsWith('/' + f) || f.endsWith('/' + c))
+  // package.json / tsconfig.json and friends get mentioned as context, not as claims about the diff.
+  const CONTEXT = /^(package(-lock)?\.json|tsconfig(\.\w+)?\.json|nx\.json|jest\.config\.[tj]s)$/
+  return [...new Set(named.filter((f) => !same(f) && !CONTEXT.test(f.split('/').pop())))]
 }
 
 /**
@@ -252,6 +283,9 @@ export function publishNode({ budget, dryRun = false }) {
     // Body: what changed (files, with the diffstat) before the prose. A reviewer's first question
     // is always "how big is this", and the answer should not be three paragraphs down.
     const evidenceLabel = (s.repro?.status === 'red' && s.evidence?.reproGreen) ? (s.repro.rung === 'e2e' ? 'evidence:e2e' : 'evidence:repro') : 'evidence:none'
+    // Filled in below, before the body is rendered with real hrefs. Declared here because body()
+    // closes over it — an explicit local beats reassigning the node's own `s`.
+    let terminal = null
     const badCites = citationCheck(pr.body, s.changed)
     const fileList = s.changed.map((f) => `- \`${f}\``).join('\n')
     const banner = evidenceLabel === 'evidence:e2e' ? 'Evidence: witnessed in the running app — screenshots red → green'
@@ -283,7 +317,7 @@ export function publishNode({ budget, dryRun = false }) {
       pr.body,
       badCites.length ? `\n> ⚠ cites files that are not in this diff: ${badCites.map((f) => `\`${f}\``).join(', ')}` : '',
       '',
-      evidenceBlock(s, budget, href),
+      evidenceBlock(s, budget, href, terminal),
       '',
       verifyBlock(s, pr),
       '',
@@ -348,7 +382,34 @@ export function publishNode({ budget, dryRun = false }) {
     // GitHub renders repo-hosted images (`blob/<branch>/<path>?raw=true`) for anyone who can see the
     // repo; Jira attachment URLs need auth and show as broken images. So evidence goes to an orphan
     // branch in the same repo, under <KEY>/<runId>/, sweepable with one `git push --delete`.
-    if (s.repro?.rung === 'e2e' && process.env.PAG_RUN_DIR) {
+    // ---- the transcript, as an image ---------------------------------------------------------
+    // The red/green text is already below; this is the same bytes rendered as the terminal actually
+    // printed them, colours and all. It is not stronger proof in principle — it is the thing a
+    // reviewer looks at, and it is harder to produce casually than a paragraph of prose. Costs about
+    // two seconds and never fails a run: if the browser is missing, the text stands alone.
+    if (s.repro?.status === 'red' && process.env.PAG_RUN_DIR && process.env.PAG_TERMSHOT !== '0') {
+      const short = path.basename(s.repro.file)
+      const [before, after] = await Promise.all([
+        termshot({
+          text: readEvidence('repro-red.log') || s.repro.redExcerpt,
+          name: 'terminal-before', pass: false,
+          title: s.repro.cmd ? s.repro.cmd.slice(0, 110) : short,
+          subtitle: `${s.issueKey} · on ${s.baseBranch}@${String(s.baseSha).slice(0, 7)}, before the fix`,
+        }),
+        termshot({
+          text: readEvidence('repro-green.log') || s.evidence?.greenExcerpt,
+          name: 'terminal-after', pass: true,
+          title: s.repro.cmd ? s.repro.cmd.slice(0, 110) : short,
+          subtitle: `${s.issueKey} · same command, same test, after the fix`,
+        }),
+      ])
+      if (before || after) {
+        terminal = { before: before && path.basename(before), after: after && path.basename(after) }
+        console.error(`rendered the transcript: ${Object.values(terminal).filter(Boolean).join(', ')}`)
+      }
+    }
+
+    if (process.env.PAG_RUN_DIR) {
       const runId = path.basename(process.env.PAG_RUN_DIR)
       const href = await pushEvidence({ repo: s.repo, remote: process.env.PAG_PUSH_REMOTE || 'origin', slug: allowed, issueKey: s.issueKey, runId })
         .catch((e) => { console.error(`evidence branch failed: ${e.message}`); return null })

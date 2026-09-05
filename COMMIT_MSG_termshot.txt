@@ -1,0 +1,36 @@
+feat(evidence): render the transcript as a terminal image, and check the prose against the diff
+
+Three things, all from what ESI2-3393's PR actually shipped.
+
+THE TRANSCRIPT, AS AN IMAGE.  The red-then-green test output was already in the PR as text, and
+text remains the more useful artifact — you can copy it, search it, re-run it. But a reviewer who
+did not run the command has only the agent's word that the text is what the terminal printed.
+lib/termshot.mjs renders the saved logs to PNGs and the Evidence section puts them side by side
+above the text. ANSI is converted rather than stripped, because a jest run's red ✕ and green ✓ are
+the verdict; a monochrome dump loses the one thing a screenshot is good at. No new dependency —
+Playwright and Chromium are already here for the browser witness — about two seconds per image, and
+a missing browser returns null rather than failing a run whose fix is already green. PAG_TERMSHOT=0
+turns it off.
+
+THE PROSE IS NOW CHECKED AGAINST THE DIFF.  citationCheck only validated `path.ts:123` citations.
+Every false statement in ESI2-3393's body was a bare FILENAME instead: "the root cause was in
+`hasMoreDecimalsThanAllowed` in format-filter-value.ts" — a function the PREVIOUS run had invented,
+still sitting in a dirty worktree, which does not exist on main — and "Added test in
+format-filter-value.test.ts", a file the diff never touched. Neither carried a line number, so
+neither was checked. A path in a PR body is a claim about the diff, and it gets checked like one
+now; package.json and tsconfig.json and friends are exempt because they are mentioned as context.
+
+EVIDENCE IS PUSHED FOR EVERY RUN THAT HAS ANY.  The orphan branch upload was gated on the e2e rung,
+so a unit-rung run had nowhere to host an image. It now runs whenever the run folder holds
+evidence, and pushEvidence already returns null when there is nothing to copy.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VJbcXmdMmjPU4fHktHFz5T
+
+Pinned by test/evidence-block.test.mjs: a unit-rung PR embeds both terminal images, a UI-rung PR
+embeds the paired before/after screenshots AND the GIF AND the terminal images, every one of them
+as an absolute raw URL on the evidence branch, and nothing relative — a relative `evidence/x.png`
+renders as a broken image, and a broken image in the one section that exists to prove the fix is
+worse than no section. It also pins the two honest-degradation cases: nothing captured emits no
+image tag rather than an empty one, and a run with no reproducing test says so instead of implying
+proof it does not have.
