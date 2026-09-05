@@ -227,6 +227,72 @@ async function remoteBranchOwner({ repo, remote, branch, baseSha }) {
  * exists`. The whole run was paid for and lost at the last step. Re-running a ticket has to be the
  * cheapest thing in the system, not the most dangerous.
  */
+// ---- does this patch also hold on a base the gate never ran on? -------------------------------
+//
+// ESI2-3393 opened GREEN into `main` and RED into `qa` from the same commit. Not flakiness: qa's
+// copy of the patched file carries an `OrganizationModel.getByKey()` call that main's does not, so
+// the frozen repro test — which mocked the four collaborators that exist on main — reached DynamoDB
+// and died. The gate can only ever speak to the base it ran on. A second PR into a different base
+// is an unverified claim until the owning project's tests are re-run on the MERGE of the two.
+//
+// Always leaves the branch exactly as it found it: the merge is `--no-commit` and is undone in a
+// `finally`, and nothing in here pushes. `no clock left` and `could not fetch` are `unknown`, not
+// `green` — an unchecked base never gets a PR claiming it was checked.
+/** The "Other bases" section of the PR body. Exported so its wording is under test. */
+export function baseCheckNote(checks = [], primary = 'main') {
+  if (!checks.length) return ''
+  const line = (c) => {
+    if (c.verdict === 'green') return `- \`${c.target}\` — the owning project's tests pass on the merge with this branch. A second PR is open below.`
+    if (c.verdict === 'conflict') return `- \`${c.target}\` — **no PR opened.** ${c.why}.`
+    if (c.verdict !== 'red') return `- \`${c.target}\` — **no PR opened**, and not checked: ${c.why}.`
+    const log = String(c.out || '').replace(/```/g, '` ` `')
+    return [
+      `- \`${c.target}\` — **no PR opened.** ${c.why}. This branch is verified for \`${primary}\`;`,
+      `  \`${c.target}\` has diverged and needs its own look.`,
+      '',
+      `<details><summary>what failed on the merge with ${c.target}</summary>`,
+      '', '```', log, '```', '</details>',
+    ].join('\n')
+  }
+  return ['', '---', '', '### Other bases', '', ...checks.map(line)].join('\n')
+}
+
+async function verifyOnMergeWith({ repo, target, testArgv, timeoutMs, onProgress = () => {} }) {
+  const git = (args) => exec('git', args, { cwd: repo, maxBuffer: 1 << 24 })
+  const head = (await git(['rev-parse', 'HEAD'])).stdout.trim()
+
+  try { await git(['fetch', 'origin', target]) }
+  catch (e) { return { verdict: 'unknown', why: `could not fetch origin/${target} (${String(e.message).split('\n')[0].slice(0, 80)})` } }
+
+  let merged = false
+  try {
+    const { stdout } = await git(['merge', '--no-commit', '--no-ff', 'FETCH_HEAD'])
+    merged = !/Already up to date/i.test(stdout)
+  } catch (e) {
+    await git(['merge', '--abort']).catch(() => {})
+    return { verdict: 'conflict', why: `this branch does not merge cleanly into ${target}` }
+  }
+
+  try {
+    onProgress(`base ${target}: re-running the owning project's tests on the merge`)
+    const bin = testArgv[0] === 'npm' || testArgv[0] === 'npx' ? testArgv[0] : 'npx'
+    const rest = testArgv[0] === 'npm' || testArgv[0] === 'npx' ? testArgv.slice(1) : testArgv
+    try {
+      await exec(bin, rest, { cwd: repo, maxBuffer: 1 << 26, timeout: timeoutMs })
+      return { verdict: 'green' }
+    } catch (e) {
+      const out = `${e.stdout || ''}${e.stderr || ''}`
+      if (e.killed) return { verdict: 'unknown', why: `the check ran past its ${(timeoutMs / 1000).toFixed(0)}s slice` }
+      return { verdict: 'red', why: `the owning project's tests fail on the merge with \`${target}\``, out: out.slice(-2500) }
+    }
+  } finally {
+    if (merged) {
+      await git(['merge', '--abort'])
+        .catch(() => git(['reset', '--hard', head]).catch(() => {}))
+    }
+  }
+}
+
 async function createOrUpdatePr({ repo, allowed, branch, base, title, body, draft = true, onProgress = () => {} }) {
   // --base matters as much as --head. Without it, `gh pr list --head agent/ESI2-3393-fix` returns
   // the PR targeting main, so the SECOND PR (the one meant for qa) found that one, decided it
@@ -472,12 +538,31 @@ export function publishNode({ budget, dryRun = false }) {
     // being overwritten is this agent's own previous attempt at the same ticket.
     await git(s.repo, ['push', ...(owner.exists && owner.agentOnly ? ['--force'] : []), pushRemote, `HEAD:refs/heads/${branch}`])
 
+    // ---- every base this run will publish to, checked before it is claimed --------------------
+    // The branch is pushed and the tree is clean, so a throwaway merge is safe here and nowhere
+    // earlier. Runs only when PAG_PR_EXTRA_TARGETS names a base; costs one test target per base.
+    const extraTargets = (process.env.PAG_PR_EXTRA_TARGETS || '')
+      .split(',').map((x) => x.trim()).filter(Boolean)
+      .filter((t) => t !== s.prTargetBranch)      // never open a PR from a branch into itself
+    const testCmd = (s.scope?.plan || []).find((c) => c.target === 'test')
+    const baseChecks = []
+    for (const t of extraTargets) {
+      if (!testCmd) { baseChecks.push({ target: t, verdict: 'unknown', why: 'this run had no test command to re-run' }); continue }
+      const left = (budget ? budget.timeLeftMs() : 300_000) - 45_000
+      if (left < 45_000) { baseChecks.push({ target: t, verdict: 'unknown', why: 'no clock left to re-run the tests on that base' }); continue }
+      const r = await verifyOnMergeWith({ repo: s.repo, target: t, testArgv: testCmd.argv, timeoutMs: left, onProgress: (l) => console.error(l) })
+      baseChecks.push({ target: t, ...r })
+      console.error(`base ${t}: ${r.verdict}${r.why ? ` — ${r.why}` : ''}`)
+    }
+    const openInto = baseChecks.filter((c) => c.verdict === 'green').map((c) => c.target)
+    const baseNote = baseCheckNote(baseChecks, s.prTargetBranch)
+
     // ---- draft PR, created or updated ---------------------------------------------------------
     // The token carries pull_requests:write and contents:write, nothing else.
     // `gh` infers the repo from the remote and gets it wrong in a worktree — name it explicitly.
     const { url: prUrl, updated } = await createOrUpdatePr({
       repo: s.repo, allowed, branch, base: s.prTargetBranch,
-      title: pr.title, body: fullBody, draft: true,
+      title: pr.title, body: fullBody + baseNote, draft: true,
       onProgress: (l) => console.error(l),
     })
 
@@ -491,15 +576,19 @@ export function publishNode({ budget, dryRun = false }) {
     // Best-effort by construction: a missing target branch, or a repo without a qa at all, must not
     // fail a run whose primary PR is already open. PAG_PR_EXTRA_TARGETS is a comma-separated list;
     // empty disables it entirely.
-    const extraTargets = (process.env.PAG_PR_EXTRA_TARGETS || '')
-      .split(',').map((x) => x.trim()).filter(Boolean)
-      .filter((t) => t !== s.prTargetBranch)      // never open a PR from a branch into itself
+    //
+    // `openInto`, not `extraTargets`: a base whose merge did not pass the owning project's tests
+    // gets no PR at all, and the reason is already in the primary PR's "Other bases" section. The
+    // agent does not open a PR it cannot stand behind.
     const extraPrs = []
-    for (const t of extraTargets) {
+    for (const t of openInto) {
       const note = [
         `> **Lower-environment copy.** Same branch as ${prUrl}, targeting \`${t}\` so this can be`,
         `> deployed and tested before it lands on \`${s.prTargetBranch}\`. Reviewing it twice is not`,
         '> necessary — read it there, test it here.',
+        '>',
+        `> The owning project's tests were re-run on the merge of this branch with \`${t}\` before this`,
+        `> PR was opened — this is not the \`${s.prTargetBranch}\` result restated.`,
         '',
       ].join('\n')
       const r = await createOrUpdatePr({
