@@ -38,7 +38,7 @@ import { verifyNode } from './nodes/verify.mjs'
 import { repairNode } from './nodes/repair.mjs'
 import { publishNode } from './nodes/publish.mjs'
 import { approveNode, REQUIRE_APPROVAL } from './nodes/approve.mjs'
-import { addComment } from './lib/jira.mjs'
+import { addComment, AGENT_MARK } from './lib/jira.mjs'
 import { traced } from './lib/trace.mjs'
 
 /** Any node that set `refusal` short-circuits to the terminal explainer. */
@@ -154,6 +154,7 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     // A refusal is only useful if it reaches a human where they already are.
     if (commentOnJira && !dryRun) {
       const lines = [
+        `${AGENT_MARK}`,
         `panda-agent-graph stopped at \`${r.at}\`: ${r.reason}`,
         '',
         String(r.detail || '').slice(0, 20000),

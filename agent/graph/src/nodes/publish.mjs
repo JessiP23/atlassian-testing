@@ -17,7 +17,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { converseJson } from '../lib/bedrock.mjs'
 import { tierFor, estimateCost } from '../lib/models.mjs'
-import { addComment, transition } from '../lib/jira.mjs'
+import { addComment, transition, AGENT_MARK } from '../lib/jira.mjs'
 import { formatFailures } from '../lib/gatelog.mjs'
 import { pairShots } from '../lib/evidence.mjs'
 import { termshot } from '../lib/termshot.mjs'
@@ -689,6 +689,7 @@ export function publishNode({ budget, dryRun = false }) {
         `Gate: ${s.gate?.summary || 'red'}`,
         `Spent $${rep.spent.toFixed(2)} in ${mins}m ${secs}s. The diff, the evidence and the remaining failures are in the PR.`,
       ] : [
+        AGENT_MARK,
         `${AGENT} opened a **draft** PR for this ticket.`,
         '', `**${prUrl}** -> \`${s.prTargetBranch}\`${updated ? ' _(updated — a run for this ticket had already opened it)_' : ''}`,
         ...extraPrs.map((x) => `${x.url} -> \`${x.target}\` — same branch, for testing on the lower environment`),

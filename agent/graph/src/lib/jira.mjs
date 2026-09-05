@@ -164,12 +164,20 @@ export async function probeIssue(key) {
  * The comments are posted under the OPERATOR's Jira account, so the author field cannot separate
  * them. The signature the agent writes can, and it is a line this codebase controls.
  */
+export const AGENT_MARK = '<!-- panda-agent -->'
+
 export function isAgentComment(body, agent) {
   // Guarded because `comments.filter(isAgentComment)` is the obvious call and passes the array
   // INDEX as the second argument, which would silently match nothing.
   const name = typeof agent === 'string' && agent ? agent : (process.env.PAG_AGENT_NAME || 'panda-agent')
-  const t = String(body || '')
-  return t.includes(`${name} opened a`) || t.includes(`${name} could not`) || t.includes(`${name} refused`)
+  const t = String(body || '').trimStart()
+  if (t.includes(AGENT_MARK)) return true              // everything written from now on
+  // Legacy: comments already on tickets carry no marker. Every one of them OPENS with the agent's
+  // name and a report verb — "panda-agent opened a draft PR", "panda-agent-graph stopped at
+  // `intake`". Both halves are required, so a human writing "panda-agent picked the wrong file"
+  // is not swallowed.
+  if (!t.startsWith(name)) return false
+  return /^.{0,80}?(opened a|stopped at|could not finish|refused|No branch pushed)/is.test(t)
 }
 
 /** One issue, redacted, comments included. Returns null when unreadable rather than throwing. */

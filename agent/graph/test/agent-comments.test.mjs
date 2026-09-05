@@ -39,3 +39,15 @@ test('survives being passed straight to Array.filter, which supplies the index',
   const comments = ['panda-agent opened a **draft** PR for this ticket.', 'Root cause: chaining is blocked by design.']
   assert.deepEqual(comments.filter(isAgentComment), ['panda-agent opened a **draft** PR for this ticket.'])
 })
+
+test('the refusal notice the graph writes is recognised too (the one that leaked)', () => {
+  assert.equal(isAgentComment('panda-agent-graph stopped at `intake`: ticket_reopened\n\nA fix was already shipped'), true)
+})
+
+test('the explicit marker wins regardless of wording', () => {
+  assert.equal(isAgentComment('<!-- panda-agent -->\nanything at all here'), true)
+})
+
+test('a human whose comment merely starts with the agent name is kept', () => {
+  assert.equal(isAgentComment('panda-agent picked the wrong file on this one, see my analysis below'), false)
+})

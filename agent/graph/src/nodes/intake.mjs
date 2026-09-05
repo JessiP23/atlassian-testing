@@ -18,7 +18,11 @@ Rules:
   text, the screen it appears on, the field's configuration and the value that failed.
 - acceptanceCriteria must be individually checkable by a test or a human clicking through.
 - nonGoals is where you put the tempting adjacent refactor. Be specific about what NOT to touch.
-- If the ticket is too vague to act on, say so in riskNotes and set confidence "low".
+- confidence is about whether there is a SYMPTOM to act on, not about whether you know the cause.
+  Finding the cause is the next four steps' job, and no customer bug report contains it. "the exact
+  regex is not visible", "no CSV was attached", "the root cause is unknown" are normal and belong in
+  riskNotes with confidence "high" or "medium". Set "low" ONLY when there is nothing concrete to
+  reproduce: no error text, no named screen, no values, no acceptance criteria you could check.
 
 symptom is the load-bearing field. It tells the code search WHERE to look and the test writer WHAT
 must fail. Fill it from the navigation steps and the screenshots:
@@ -126,15 +130,27 @@ export function intakeNode({ budget }) {
       }
     }
 
-    if (data.confidence === 'low') {
+    // Low confidence is a WARNING unless the ticket really gives nothing to reproduce.
+    //
+    // ESI2-3393 refused here with "the exact regex is not visible", "no CSV was provided", "the
+    // root cause is unknown" — an accurate description of every customer bug report ever filed, and
+    // of a ticket the agent had already fixed correctly twice. A spec that names the screen, quotes
+    // the error and lists the failing values IS actionable; the unknowns it lists are the next four
+    // steps' job. Refusing on them refuses the work.
+    const sym = data.symptom || {}
+    const actionable = Boolean(sym.errorText || sym.screen || (sym.inputs || []).length || (data.acceptanceCriteria || []).length)
+    if (data.confidence === 'low' && !actionable) {
       return {
         ticket, spec: data, ticketShots,
         refusal: {
           at: 'intake',
           reason: 'ticket_underspecified',
-          detail: data.riskNotes?.join('; ') || 'model reported low confidence on the spec',
+          detail: data.riskNotes?.join('; ') || 'the ticket names no error, no screen and no checkable criterion',
         },
       }
+    }
+    if (data.confidence === 'low') {
+      console.error(`      low confidence, but the ticket is actionable — continuing. Unknowns go in the PR: ${(data.riskNotes || []).slice(0, 2).join('; ').slice(0, 160)}`)
     }
     if (ticketShots.length) console.error(`      kept ${ticketShots.length} ticket screenshot(s) for the PR`)
     return { ticket, spec: data, ticketShots }
