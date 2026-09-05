@@ -63,7 +63,28 @@ const real = (v) => {
 }
 const HAS_LOGIN = () => Boolean(real(process.env.PAG_APP_EMAIL) && real(process.env.PAG_APP_PASSWORD))
 
-const WITNESS_PROMPT = (s, { specFile, cmd, appUrl, previous, hasLogin, timeMs = 300_000 }) => `You are writing a WITNESS for ${s.issueKey}: a Playwright spec that drives the running app
+/**
+ * The app's OWN route table, from the index. $0, no model call.
+ *
+ * ESI2-3406's spec navigated by guessing: `getByRole('link').filter({ hasText: /asset|collection|
+ * project|equipment|macs/i })`, then `getByRole('row').nth(1)`, each wrapped in `.catch(() => {})`.
+ * It never reached a record, timed out at 180s, and captured nothing. The routes were sitting in
+ * `.par/index.json` the whole time — `indexer.mjs` extracts them — and nobody handed them over.
+ * A `page.goto()` to a real route is deterministic; clicking through a nav you cannot see is not.
+ */
+function appRoutes(profile) {
+  try {
+    const par = process.env.PAG_PAR_DIR || path.resolve(import.meta.dirname, '../../../.par')
+    const idx = JSON.parse(fs.readFileSync(path.join(par, 'index.json'), 'utf8'))
+    const routes = (idx.files || [])
+      .filter((f) => profile.isUi?.(f.path) && (f.routes || []).length)
+      .flatMap((f) => f.routes)
+      .filter((r) => typeof r === 'string' && r.startsWith('/'))
+    return [...new Set(routes)].sort()
+  } catch { return [] }
+}
+
+const WITNESS_PROMPT = (s, { specFile, cmd, appUrl, previous, hasLogin, timeMs = 300_000, routes = [] }) => `You are writing a WITNESS for ${s.issueKey}: a Playwright spec that drives the running app
 at ${appUrl} and FAILS because of the bug the ticket reports. You are NOT fixing anything. A separate
 step fixes the code; the app hot-reloads; your spec must then pass unchanged.
 
@@ -101,6 +122,21 @@ ${hasLogin
   light AND dark, not only the new one.
 - Locate elements by role/label/text (\`getByRole\`, \`getByLabel\`, \`getByText\`), never by CSS class.
   Wait with \`expect(...).toBeVisible()\` / \`toHaveText\`, never \`waitForTimeout\`.
+${routes.length ? `
+## This app's real routes — NAVIGATE, do not hunt
+${routes.map((r) => `    ${r}`).join('\n')}
+\`page.goto('/home/:moduleId/collections/:collectionId')\` with ids you read off the page or the URL
+after one click beats clicking through a navigation you cannot see. Get to the screen by URL first;
+only click for the interaction the ticket is actually about.
+` : ''}
+- NEVER wrap a navigation or a click in \`.catch(() => {})\`. A swallowed failure does not stop the
+  test — it walks on, fails at the final assertion three minutes later with the page already closed,
+  and captures NOTHING. Let it throw at the step that broke: that failure, with its screenshot, is
+  useful evidence and a silent timeout is not.
+- Call \`check\` or \`shot\` EARLY and often — right after login, and after each navigation. A spec
+  that reaches its first screenshot only at the end has no evidence when it times out before then.
+- Keep the whole test under 90 seconds of wall clock. If the screen needs more than about six steps
+  to reach, say so with \`REPRO: none\` instead of writing a spec that will time out.
 - For a layout/padding/colour symptom assert computed style, which is exact and stable:
   \`await expect(el).toHaveCSS('background-color', 'rgb(43, 5, 72)')\` — Playwright reports colours as
   \`rgb(r, g, b)\`, so convert any hex in the ticket before asserting.
@@ -417,7 +453,7 @@ async function witness(s, { budget, onProgress, appUrl }) {
     onProgress(`witness attempt ${attempt}/${ATTEMPTS} -> ${specFile}`)
     const r = await runClaude({
       cwd: s.repo, model: tier.model, budgetUsd: allowance, timeoutMs: timeMs, onProgress,
-      prompt: WITNESS_PROMPT(s, { specFile, cmd, appUrl, previous, hasLogin: HAS_LOGIN(), timeMs }),
+      prompt: WITNESS_PROMPT(s, { specFile, cmd, appUrl, previous, hasLogin: HAS_LOGIN(), timeMs, routes: appRoutes(loadProfile(s.repo)) }),
     })
     budget.charge('repro', r.cost, { model: tier.model, attempt, subtype: r.subtype, exit: r.code, rung: 'e2e' })
 
@@ -453,6 +489,23 @@ async function witness(s, { budget, onProgress, appUrl }) {
     }
 
     const before = await collectWitness(red.outDir, 'before')
+
+    // A red with NO SCREENSHOTS did not witness anything.
+    //
+    // ESI2-3406: the spec timed out after 180s having never reached the record, the page closed,
+    // and `check()`'s screenshot threw "Target page, context or browser has been closed". Playwright
+    // reported a failure, so this accepted it as a reproduction — and then the run was hostage to
+    // it: the product fix was correct, verify re-ran the same blind spec, it timed out again, and a
+    // correct patch shipped as an INCOMPLETE hand-over. A witness that captured nothing is worth
+    // strictly less than no witness, because it also blocks the rung that would have worked.
+    if (!before.shots.length) {
+      previous = `Attempt ${attempt}: the spec failed but captured NO screenshots — it never reached the screen. `
+        + `Playwright said:\n${excerpt(red.out)}`
+      onProgress('witness failed without reaching the screen (0 screenshots) — not a reproduction')
+      fs.rmSync(specFile, { force: true })
+      return null
+    }
+
     saveEvidence('repro-red.log', red.out)
     onProgress(`witness RED against ${appUrl}: ${before.shots.length} screenshot(s), video ${before.video ? 'yes' : 'no'}`)
 
