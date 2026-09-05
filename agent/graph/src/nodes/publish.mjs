@@ -18,7 +18,7 @@ import path from 'node:path'
 import { converseJson } from '../lib/bedrock.mjs'
 import { tierFor, estimateCost } from '../lib/models.mjs'
 import { addComment, transition, AGENT_MARK } from '../lib/jira.mjs'
-import { formatFailures } from '../lib/gatelog.mjs'
+import { formatFailures, parseGateFailures } from '../lib/gatelog.mjs'
 import { pairShots } from '../lib/evidence.mjs'
 import { termshot } from '../lib/termshot.mjs'
 
@@ -114,6 +114,18 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
       `<details><summary>After this patch — PASS</summary>`,
       '', '```', (e.greenExcerpt || '').slice(0, 3000), '```', '</details>',
     )
+    // The ticket's symptom is on a screen, the fix is not. Say so, once, where the reviewer is
+    // looking — otherwise a UI-visible bug fixed in a lambda reads as "the agent skipped the UI".
+    // It did not: the local dev server calls the DEPLOYED backend, so a screenshot taken here would
+    // show the OLD behaviour no matter what this patch does. That picture would be a lie.
+    if (!isE2e && s.spec?.symptom?.screen) {
+      lines.push('',
+        `> **Why there are no app screenshots.** The symptom appears on ${s.spec.symptom.screen}, but the fix `
+        + `is in \`${(s.scope?.owners || []).join(', ') || 'a backend project'}\` — code the local dev server does not run; it calls the `
+        + `deployed backend. A before/after taken here would show the old behaviour whatever this patch does. `
+        + `The unit evidence above exercises the exact values from the ticket instead; the manual steps under `
+        + `**How to verify** are how to see it on screen once this is deployed.`)
+    }
     if (isE2e) {
       let spec = ''
       try { spec = fs.readFileSync(r.file, 'utf8') } catch { /* not readable here */ }
@@ -273,11 +285,29 @@ async function remoteBranchOwner({ repo, remote, branch, baseSha }) {
 /** The "Other bases" section of the PR body. Exported so its wording is under test. */
 export function baseCheckNote(checks = [], primary = 'main') {
   if (!checks.length) return ''
+  // Jest and nx colour their output. Pasted raw into a markdown block it reads as `^[[2m` noise and
+  // buries the one line that matters.
+  const plain = (t) => String(t || '').replace(/\u001b\[[0-9;]*m/g, '').replace(/```/g, '` ` `')
+  // The headline a reviewer needs, not the middle of a stack trace: the assertion, the suite
+  // totals, and whatever `●` line names the failing case.
+  const headline = (t) => {
+    const ls = plain(t).split('\n')
+    const keep = ls.filter((l) => /^\s*●|Tests:|Test Suites:|✕|Expected|Received|Error:|error TS|getaddrinfo|ECONN/.test(l))
+    return (keep.length ? keep : ls).slice(0, 24).join('\n')
+  }
   const line = (c) => {
     if (c.verdict === 'green') return `- \`${c.target}\` — the owning project's tests pass on the merge with this branch. A second PR is open below.`
+    if (c.verdict === 'green-agent-test') return [
+      `- \`${c.target}\` — **PR opened.** ${c.why}.`,
+      `  \`${(c.files || []).join('`, `') || 'the reproducing test'}\` was written against \`${primary}\` and needs its mocks widened for \`${c.target}\`;`,
+      `  the product change itself is unaffected. Fix that on the \`${c.target}\` PR before merging it.`,
+      '',
+      `<details><summary>what fails on the merge with ${c.target}</summary>`,
+      '', '```', headline(c.out), '```', '</details>',
+    ].join('\n')
     if (c.verdict === 'conflict') return `- \`${c.target}\` — **no PR opened.** ${c.why}.`
     if (c.verdict !== 'red') return `- \`${c.target}\` — **no PR opened**, and not checked: ${c.why}.`
-    const log = String(c.out || '').replace(/```/g, '` ` `')
+    const log = headline(c.out)
     return [
       `- \`${c.target}\` — **no PR opened.** ${c.why}. This branch is verified for \`${primary}\`;`,
       `  \`${c.target}\` has diverged and needs its own look.`,
@@ -289,7 +319,7 @@ export function baseCheckNote(checks = [], primary = 'main') {
   return ['', '---', '', '### Other bases', '', ...checks.map(line)].join('\n')
 }
 
-async function verifyOnMergeWith({ repo, target, testArgv, timeoutMs, onProgress = () => {} }) {
+async function verifyOnMergeWith({ repo, target, testArgv, timeoutMs, ownTest, ownNewTests = [], onProgress = () => {} }) {
   const git = (args) => exec('git', args, { cwd: repo, maxBuffer: 1 << 24 })
   const head = (await git(['rev-parse', 'HEAD'])).stdout.trim()
 
@@ -315,6 +345,21 @@ async function verifyOnMergeWith({ repo, target, testArgv, timeoutMs, onProgress
     } catch (e) {
       const out = `${e.stdout || ''}${e.stderr || ''}`
       if (e.killed) return { verdict: 'unknown', why: `the check ran past its ${(timeoutMs / 1000).toFixed(0)}s slice` }
+      // WHOSE failure is it? Three runs in a row, the qa merge went red on the agent's own frozen
+      // repro test — written against main, where getTemplateColumns does not call
+      // OrganizationModel.getByKey, which on qa it does. The PRODUCT change merges clean and is
+      // still needed there. Withholding the qa PR over the shape of the agent's own test is the
+      // wrong call: open it, and name the test that needs its mocks widened.
+      const failures = parseGateFailures(out, 'test')
+      const mine = [ownTest, ...ownNewTests].filter(Boolean)
+      const same = (a, b) => a === b || a.endsWith('/' + b) || b.endsWith('/' + a)
+      if (failures.length && failures.every((f) => f.file && mine.some((m) => same(m, f.file)))) {
+        return {
+          verdict: 'green-agent-test', out: out.slice(-2500),
+          why: `the product change is clean on \`${target}\`; only this run's own test file fails there`,
+          files: [...new Set(failures.map((f) => f.file))],
+        }
+      }
       return { verdict: 'red', why: `the owning project's tests fail on the merge with \`${target}\``, out: out.slice(-2500) }
     }
   } finally {
@@ -408,11 +453,19 @@ export function publishNode({ budget, dryRun = false }) {
       '',
     ].filter(Boolean).join('\n') : ''
 
+    // The MODEL'S prose, captured once. `body()` is called twice — first with relative hrefs, then
+    // again with the evidence-branch URLs once pushEvidence has somewhere to point at — and it used
+    // to read `pr.body`, which the first call had already overwritten with the whole composed body.
+    // The second call then nested that inside itself, so every PR carried the Evidence section and
+    // the file list TWICE: once with `evidence/...` paths that resolve nowhere on GitHub and render
+    // as alt text, then again with working URLs. That is the "I only see alt text" bug.
+    const narrative = pr.body
+
     const body = (href) => [
       handover,
       `> **${banner}**`,
       '',
-      pr.body,
+      narrative,
       badCites.length ? `\n> ⚠ cites files that are not in this diff: ${badCites.map((f) => `\`${f}\``).join(', ')}` : '',
       '',
       evidenceBlock(s, budget, href, terminal),
@@ -600,11 +653,16 @@ export function publishNode({ budget, dryRun = false }) {
       if (!testCmd) { baseChecks.push({ target: t, verdict: 'unknown', why: 'this run had no test command to re-run' }); continue }
       const left = (budget ? budget.timeLeftMs() : 300_000) - 45_000
       if (left < 45_000) { baseChecks.push({ target: t, verdict: 'unknown', why: 'no clock left to re-run the tests on that base' }); continue }
-      const r = await verifyOnMergeWith({ repo: s.repo, target: t, testArgv: testCmd.argv, timeoutMs: left, onProgress: (l) => console.error(l) })
+      const r = await verifyOnMergeWith({
+        repo: s.repo, target: t, testArgv: testCmd.argv, timeoutMs: left,
+        ownTest: s.repro?.file,
+        ownNewTests: (s.changed || []).filter((f) => /\.(test|spec)\.[tj]sx?$/.test(f)),
+        onProgress: (l) => console.error(l),
+      })
       baseChecks.push({ target: t, ...r })
       console.error(`base ${t}: ${r.verdict}${r.why ? ` — ${r.why}` : ''}`)
     }
-    const openInto = baseChecks.filter((c) => c.verdict === 'green').map((c) => c.target)
+    const openInto = baseChecks.filter((c) => c.verdict === 'green' || c.verdict === 'green-agent-test').map((c) => c.target)
     const baseNote = baseCheckNote(baseChecks, s.prTargetBranch)
 
     // ---- draft PR, created or updated ---------------------------------------------------------

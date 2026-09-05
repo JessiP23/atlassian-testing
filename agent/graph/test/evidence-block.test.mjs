@@ -104,3 +104,29 @@ test('a ticket with no screenshots gets no empty section', () => {
   const s = { issueKey: 'X-1', baseBranch: 'main', baseSha: 'abc', repro: { status: 'none' }, gate: {} }
   assert.doesNotMatch(evidenceBlock(s, {}, (f) => f, null), /Reported in the ticket/)
 })
+
+test('a UI symptom fixed in a lambda says why no app screenshots exist', () => {
+  const s = {
+    issueKey: 'ESI2-3393', baseBranch: 'main', baseSha: 'abcdef1234',
+    spec: { symptom: { screen: "the import 'Review & Finalize' step" } },
+    scope: { owners: ['lambdas-fns-import-one-schema-template'] },
+    repro: { status: 'red', rung: 'unit', file: 'a/b.repro.test.ts', sha: 'deadbeef', redExcerpt: 'FAIL' },
+    evidence: { reproGreen: true, greenExcerpt: 'PASS' },
+    gate: { ok: true, summary: 'green' },
+  }
+  const out = evidenceBlock(s, { maxMinutes: 30 }, (f) => `E/${f}`, null)
+  assert.match(out, /Why there are no app screenshots/)
+  assert.match(out, /Review & Finalize/)
+  assert.match(out, /deployed backend/)
+})
+
+test('a witnessed UI run does not carry that explanation', () => {
+  const s = {
+    issueKey: 'X-1', baseBranch: 'main', baseSha: 'abc',
+    spec: { symptom: { screen: 'the record detail tab bar' } },
+    repro: { status: 'red', rung: 'e2e', file: 'e2e/x.spec.mjs', sha: 'aa', redExcerpt: 'FAIL', before: { shots: [] } },
+    evidence: { reproGreen: true, greenExcerpt: 'PASS', after: { shots: [] } },
+    gate: { ok: true, summary: 'green' }, scope: { owners: ['w'] },
+  }
+  assert.doesNotMatch(evidenceBlock(s, {}, (f) => f, null), /Why there are no app screenshots/)
+})
