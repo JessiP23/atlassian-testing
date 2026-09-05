@@ -158,7 +158,13 @@ const dedupe = (list) => {
 export function locateNode({ budget, onProgress = () => {} }) {
   return async (s) => {
     const tier = tierFor('rerank')
-    const query = [s.spec.summary, ...(s.spec.acceptanceCriteria || [])].join(' ')
+    // The symptom is part of the query. "Regex Validation Error" + "OneSchema field-mapping step"
+    // reaches `validation_options.regex` in the template builder; the summary alone reaches the
+    // backend importer, which is where six runs of ESI2-3393 went. Error text and screen name are
+    // the reporter's most precise words, and until now the retriever never saw them.
+    const sym = s.spec.symptom || {}
+    const symptomText = [sym.errorText, sym.screen, ...(sym.inputs || [])].filter(Boolean).join(' ')
+    const query = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText].join(' ')
 
     // Deterministic, $0, ~2s. Reads .par/index.json — built once per merge, not per ticket.
     const { stdout } = await exec('node', [ROUTER_CLI, 'route', query, '--k', String(CANDIDATE_K), '--json'], {
@@ -170,7 +176,7 @@ export function locateNode({ budget, onProgress = () => {} }) {
 
     // 1. phrases the reporter read on screen — ahead of the lexical score, because an exact label
     //    match is stronger evidence than a term overlap.
-    const phrases = ticketPhrases([s.spec.summary, ...(s.spec.acceptanceCriteria || []), s.ticket?.description || ''].join(' '))
+    const phrases = ticketPhrases([s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, s.ticket?.description || ''].join(' '))
     const seeds = phraseSeeds(index.files, phrases)
     let candidates = dedupe([...seeds, ...routed]).slice(0, CANDIDATE_K)
 
@@ -204,6 +210,8 @@ export function locateNode({ budget, onProgress = () => {} }) {
     const user = [
       `TICKET: ${s.spec.summary}`,
       `ACCEPTANCE: ${(s.spec.acceptanceCriteria || []).join(' | ')}`,
+      sym.screen ? `SYMPTOM APPEARS ON: ${sym.screen}${sym.errorText ? ` — "${sym.errorText}"` : ''}` : '',
+      sym.layer && sym.layer !== 'unknown' ? `LIKELY LAYER: ${sym.layer}${sym.why ? ` (${sym.why})` : ''} — a pick in a different layer must explain how it reaches that screen.` : '',
       '',
       'CANDIDATES (rank. path — exports):',
       ...candidates.map((c, i) => `${i + 1}. ${c.path} — ${(c.exports || []).slice(0, 12).join(', ') || '(none)'}`),

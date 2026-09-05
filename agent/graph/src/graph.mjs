@@ -62,6 +62,18 @@ export function afterPatch(s) {
   return s.refusal ? 'refuse' : 'verify'
 }
 
+// The same edge, one step earlier. `reproduce` is the first node that reads the code with the
+// ticket's symptom in hand; when it finds the plan's files cannot produce that symptom it names the
+// file that does, and the plan is redone around it — before an Opus patch session is paid for and
+// before a red test against the wrong file is frozen. Same bound, same refuse path.
+export function afterReproduce(s) {
+  if (s.escalation) {
+    const canRetry = s.escalation.neededFiles?.length && (s.replans ?? 0) < MAX_REPLANS
+    return canRetry ? 'planning' : 'refuse'
+  }
+  return s.refusal ? 'refuse' : 'patch'
+}
+
 // Whether a red gate is worth another repair attempt, or whether it is time to hand the work to a
 // human. THREE answers, and the third is the one that was missing:
 //
@@ -191,7 +203,7 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     .addConditionalEdges('intake', orRefuse('locate'), ['locate', 'refuse'])
     .addConditionalEdges('locate', orRefuse('planning'), ['planning', 'refuse'])
     .addConditionalEdges('planning', orRefuse('reproduce'), ['reproduce', 'refuse'])
-    .addConditionalEdges('reproduce', orRefuse('patch'), ['patch', 'refuse'])
+    .addConditionalEdges('reproduce', afterReproduce, ['patch', 'planning', 'refuse'])
     .addConditionalEdges('patch', afterPatch, ['verify', 'planning', 'refuse'])
     .addConditionalEdges('verify', afterVerifyWith(budget), ['approve', 'repair', 'handover', 'refuse'])
     .addConditionalEdges('approve', orRefuse('publish'), ['publish', 'refuse'])

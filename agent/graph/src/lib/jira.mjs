@@ -178,8 +178,46 @@ export async function fetchIssue(key) {
       author: c.author?.displayName || 'unknown',
       body: clean(adfToText(c.body)),
     })),
-    attachments: (f.attachment || []).map((a) => ({ filename: a.filename, mimeType: a.mimeType, content: a.content })),
+    attachments: (f.attachment || []).map((a) => ({ id: a.id, filename: a.filename, mimeType: a.mimeType, size: a.size, content: a.content })),
   }
+}
+
+/**
+ * The ticket's screenshots, as bytes a vision model can read.
+ *
+ * Reporters put the decisive facts in images: which SCREEN the error is on, the exact error text,
+ * the field's configuration, the value that failed. ESI2-3393's text says "map the fields and click
+ * Next — an error is displayed"; the screenshot is what shows it is OneSchema's validation, not the
+ * backend importer. Six runs read the text and patched the backend. This is why intake now looks.
+ *
+ * Bounded: PNG/JPEG/GIF/WebP only, `max` files, `maxBytes` each. Goes through the same base
+ * resolution as every other call — a scoped token cannot fetch from the site URL. Any failure is a
+ * skipped image, never a failed run.
+ */
+export async function fetchAttachmentImages(ticket, { max = 6, maxBytes = 2 * 1024 * 1024 } = {}) {
+  const FORMAT = { 'image/png': 'png', 'image/jpeg': 'jpeg', 'image/gif': 'gif', 'image/webp': 'webp' }
+  const pick = (ticket?.attachments || [])
+    .filter((a) => FORMAT[a.mimeType] && a.id && (!a.size || a.size <= maxBytes))
+    .slice(0, max)
+  if (!pick.length) return []
+  const { auth } = jiraConfig()
+  const candidates = await bases()
+  const out = []
+  for (const a of pick) {
+    for (const base of candidates) {
+      try {
+        const res = await fetch(`${base}/rest/api/3/attachment/content/${a.id}`, {
+          headers: { Authorization: auth }, redirect: 'follow', signal: AbortSignal.timeout(20_000),
+        })
+        if (!res.ok) { if ([401, 403, 404].includes(res.status)) continue; break }
+        const buf = Buffer.from(await res.arrayBuffer())
+        if (buf.length > maxBytes) break
+        out.push({ filename: a.filename, format: FORMAT[a.mimeType], bytes: buf })
+        break
+      } catch { /* next base, or skip */ }
+    }
+  }
+  return out
 }
 
 export async function addComment(key, markdown) {

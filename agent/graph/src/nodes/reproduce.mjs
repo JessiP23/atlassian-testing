@@ -127,12 +127,26 @@ bug exists. A separate step will fix the code afterwards and your test must then
 
 ## The bug, from the ticket
 ${s.spec.summary}
-
+${s.spec.symptom?.screen ? `
+## The symptom, exactly as reported
+- Screen: ${s.spec.symptom.screen}
+- Error text: ${s.spec.symptom.errorText || '(no error shown — a wrong value or a missing element)'}
+- Values involved: ${(s.spec.symptom.inputs || []).join(', ') || '(none given)'}
+- Likely layer: ${s.spec.symptom.layer || 'unknown'}${s.spec.symptom.why ? ` — ${s.spec.symptom.why}` : ''}
+` : ''}
 ## Acceptance criteria (the EXPECTED behaviour)
 ${(s.spec.acceptanceCriteria || []).map((a, i) => `${i + 1}. ${a}`).join('\n')}
 
-## Where the fix will go (read these to know what to exercise)
+## Where the plan says the fix will go (read these to know what to exercise)
 ${s.plan.impactedFiles.map((f) => `- ${f}`).join('\n')}
+
+## The plan can be wrong, and you are the first step that reads the code
+Before writing anything, trace how THESE files produce the symptom on THAT screen for THOSE values.
+If they do not — the error text is built elsewhere, the values never reach this code, the screen is
+rendered by a different layer — do not write a test here. Answer instead with one line:
+    REPRO: wrong-location <path/to/the/file/that/actually/produces/it> <one sentence why>
+naming a file that EXISTS in this repo. The plan is redone around that file. A red test against the
+wrong file is worse than no test: it turns green when the wrong file is patched.
 
 ## The ONE file you may create — exactly this path, nothing else
     ${specFile}
@@ -157,6 +171,11 @@ spec file (imports, mocks, describe/it naming).`}
 3. Stop. Leave the file in its inverted (failing) state. Do not fix the code. Do not touch any other
    file. Do not commit.
 
+The failing input must be one the TICKET gives — the value in its steps or screenshots, or the exact
+configuration it describes. Do not go looking for some other input that happens to fail here; a red
+on an invented value reproduces nothing the customer saw. If the ticket gives no concrete value and
+the acceptance criteria do not imply one, say so with \`REPRO: none\`.
+
 The assertion is about a VALUE the current code produces for the ticket's input — never about
 whether a function, export or module exists. Calling a symbol that is not on this commit (through
 \`?.\`, a cast, \`require\` in a try, or any other way) and asserting on \`undefined\` is not a
@@ -169,9 +188,10 @@ anything it reports. In particular: import EXACTLY the way the nearest existing 
 project imports, because a cross-package import the repo forbids fails
 \`@nx/enforce-module-boundaries\`, and do not start a line with a semicolon.
 ${previous ? `\n## Previous attempt\n${previous}\n` : ''}
-Finish with one line: \`REPRO: red\` if step 2 failed as intended, or \`REPRO: none <one-sentence reason>\`
+Finish with one line: \`REPRO: red\` if step 2 failed as intended; \`REPRO: wrong-location <file> <why>\`
+if the symptom is produced somewhere the plan did not allow; or \`REPRO: none <one-sentence reason>\`
 if the symptom cannot be made to fail in a test at this level (say why: needs a browser, needs a live
-service, behaviour is not reachable from these files).`
+service, no concrete input in the ticket).`
 
 export function reproduceNode({ budget, onProgress = () => {} }) {
   return async (s) => {
@@ -219,6 +239,26 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         prompt: PROMPT(s, { specFile, cmd: command.display, rung, previous }),
       })
       budget.charge('repro', r.cost, { model: tier.model, attempt, subtype: r.subtype, exit: r.code })
+
+      // ---- the plan pointed at the wrong place, and this step is the first to read the code -----
+      //
+      // Run 6 on ESI2-3393: the model ran `git show 9288a5f -- get-template-columns.ts`, READ the
+      // correct fix in local history, and then wrote a red test against group-separators.ts anyway,
+      // because that was the file the plan allowed and there was no other answer it could give. It
+      // invented `.50` to get a red. `patch` has had an escalation for months; this is the same one,
+      // one step earlier, where the cost of being wrong is a whole run.
+      const wrong = r.text.match(/REPRO:\s*wrong-location\s+(\S+)\s*(.*)/i)
+      if (wrong) {
+        const file = wrong[1].replace(/^[`'"]|[`'",.]+$/g, '').replace(new RegExp(`^${s.repo.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/?`), '')
+        fs.rmSync(path.join(s.repo, specFile), { force: true })
+        if (fs.existsSync(path.join(s.repo, file)) && !(s.plan.impactedFiles || []).includes(file)) {
+          onProgress(`repro says the plan is in the wrong place — the symptom is produced by ${file}: ${wrong[2].slice(0, 120)}`)
+          return { escalation: { from: 'reproduce', text: r.text, neededFiles: [file] }, refusal: null }
+        }
+        onProgress(`repro named ${file} as the real location but it ${fs.existsSync(path.join(s.repo, file)) ? 'is already in the plan' : 'does not exist'} — continuing`)
+        previous = `Attempt ${attempt}: you answered wrong-location ${file}, which ${fs.existsSync(path.join(s.repo, file)) ? 'is already an allowed file' : 'does not exist in this repo'}. Write the test, or name a file that exists and is not in the plan.`
+        continue
+      }
 
       // Mechanically undo anything that is not the one allowed file. The repro step never edits code.
       const { stdout: names } = await exec('git', ['diff', '--name-only', 'HEAD'], { cwd: s.repo, maxBuffer: 1 << 24 })

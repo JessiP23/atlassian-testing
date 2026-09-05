@@ -61,7 +61,7 @@ const backoff = (attempt) => Math.min(30_000, 1_500 * 2 ** attempt) * (0.5 + Mat
  * @param {{model:string, system:string, user:string, maxTokens?:number, json?:boolean}} args
  * @returns {Promise<{text:string, inTok:number, outTok:number}>}
  */
-export async function converse({ model, system, user, maxTokens = 4096, json = false }) {
+export async function converse({ model, system, user, maxTokens = 4096, json = false, images = [] }) {
   const budget = isReasoning(model) ? Math.max(maxTokens * 4, 3000) : maxTokens
   const inferenceConfig = { maxTokens: budget }
   if (!noTemperature.has(model)) inferenceConfig.temperature = 0
@@ -69,7 +69,12 @@ export async function converse({ model, system, user, maxTokens = 4096, json = f
   const req = {
     modelId: model,
     system: [{ text: system }],
-    messages: [{ role: 'user', content: [{ text: user }] }],
+    // Images ride in the same user turn as the text. Bedrock Converse takes raw bytes per image;
+    // the caller has already bounded count and size (see jira.fetchAttachmentImages).
+    messages: [{ role: 'user', content: [
+      { text: user },
+      ...images.map((i) => ({ image: { format: i.format, source: { bytes: i.bytes } } })),
+    ] }],
     inferenceConfig,
   }
 
@@ -178,14 +183,14 @@ export function repairJson(body) {
  * Now: a truncated answer retries with a much larger budget, a malformed one retries once as
  * before, and the final error says which of the two it was.
  */
-export async function converseJson({ model, system, user, maxTokens = 4096 }) {
+export async function converseJson({ model, system, user, maxTokens = 4096, images = [] }) {
   const sys = `${system}\n\nRespond with ONLY a single JSON object. No prose, no markdown fence.`
   const CEILING = Number(process.env.PAG_JSON_MAX_TOKENS || 16384)
   let budget = maxTokens
   let lastBody = '', lastError = '', truncated = false, note = ''
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    const { text, inTok, outTok, stopReason } = await converse({ model, system: sys, user: user + note, maxTokens: budget })
+    const { text, inTok, outTok, stopReason } = await converse({ model, system: sys, user: user + note, maxTokens: budget, images })
     const body = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
     try {
       return { data: JSON.parse(body), inTok, outTok }

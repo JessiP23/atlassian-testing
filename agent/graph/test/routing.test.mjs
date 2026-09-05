@@ -3,7 +3,7 @@
 // worth pinning. Every case below is a real terminal state a run has actually reached.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { afterPatch, afterVerifyWith, afterRepair } from '../src/graph.mjs'
+import { afterPatch, afterReproduce, afterVerifyWith, afterRepair } from '../src/graph.mjs'
 import { Budget } from '../src/lib/budget.mjs'
 import { MAX_REPAIR_ATTEMPTS, MAX_REPLANS } from '../src/state.mjs'
 
@@ -91,4 +91,12 @@ test('a failure outside the frozen file still goes to repair', () => {
     changed: ['app/real.ts'], attempts: 0,
   }
   assert.equal(afterVerifyWith(clock(3))(s), 'repair')
+})
+
+test('reproduce can send the run back to planning when the plan is in the wrong place', () => {
+  assert.equal(afterReproduce({ escalation: { from: 'reproduce', neededFiles: ['packages/lambdas/fns/x/get-template-columns.ts'] }, replans: 0 }), 'planning')
+  assert.equal(afterReproduce({ escalation: { from: 'reproduce', neededFiles: ['a.ts'] }, replans: MAX_REPLANS }), 'refuse', 'bounded like patch')
+  assert.equal(afterReproduce({ escalation: { neededFiles: [] } }), 'refuse', 'nothing to widen')
+  assert.equal(afterReproduce({ repro: { status: 'red' } }), 'patch')
+  assert.equal(afterReproduce({ refusal: { at: 'reproduce' } }), 'refuse')
 })

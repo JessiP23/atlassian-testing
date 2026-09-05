@@ -7,18 +7,40 @@
 
 import { converseJson } from '../lib/bedrock.mjs'
 import { tierFor, estimateCost } from '../lib/models.mjs'
-import { fetchIssue, probeIssue } from '../lib/jira.mjs'
+import { fetchIssue, probeIssue, fetchAttachmentImages } from '../lib/jira.mjs'
 
 const SYSTEM = `You convert a bug/feature ticket into an executable spec for a code-fixing agent.
 
 Rules:
-- Ground every claim in the ticket text. Never invent reproduction steps or file names.
+- Ground every claim in the ticket text AND its screenshots. Never invent reproduction steps, values
+  or file names. When the screenshots are attached, READ them: they usually carry the exact error
+  text, the screen it appears on, the field's configuration and the value that failed.
 - acceptanceCriteria must be individually checkable by a test or a human clicking through.
 - nonGoals is where you put the tempting adjacent refactor. Be specific about what NOT to touch.
 - If the ticket is too vague to act on, say so in riskNotes and set confidence "low".
 
+symptom is the load-bearing field. It tells the code search WHERE to look and the test writer WHAT
+must fail. Fill it from the navigation steps and the screenshots:
+- screen: the exact UI surface the user is on when the symptom shows (e.g. "OneSchema import
+  field-mapping step after clicking Next", "record View Full Details tab bar", "Automation logs").
+  Name the step number from the ticket. If the symptom is a wrong value with no error, say so.
+- errorText: the error message verbatim if one is shown (from text or screenshot), else "".
+- inputs: the concrete values involved — the cell value, field name and configuration, record id,
+  role name. Only values that appear in the ticket or its images. Empty array if none.
+- layer: your best reading of where the defect must live given the screen: "web-app" (rendered in the
+  browser), "import-template" (a validation rule shipped to the import widget), "backend" (a lambda
+  or library that runs after the click), or "unknown". Say why in one clause.
+
+reopened: read the comments. If they show a fix was shipped for this ticket (a PR, a deploy, a
+"confirmed working" from QA) and a LATER comment says the customer still sees the issue, this is a
+re-open of a previous attempt, not a fresh bug. Set reopened true, name the earlier ticket or PR in
+priorFix, and set confidence "low" — a re-open needs the engineer who shipped the first fix, not a
+second guess from a different starting point.
+
 Return JSON:
 {"summary":str,"acceptanceCriteria":[str],"constraints":[str],"nonGoals":[str],
+ "symptom":{"screen":str,"errorText":str,"inputs":[str],"layer":"web-app"|"import-template"|"backend"|"unknown","why":str},
+ "reopened":bool,"priorFix":str,
  "riskNotes":[str],"testPlan":[str],"confidence":"high"|"medium"|"low"}`
 
 export function intakeNode({ budget }) {
@@ -31,6 +53,18 @@ export function intakeNode({ budget }) {
       const p = await probeIssue(s.issueKey).catch((e) => ({ verdict: e.message }))
       return { refusal: { at: 'intake', reason: 'ticket_unreachable', detail: `${s.issueKey}: ${p.verdict}` } }
     }
+
+    // An Epic is a container. ESI2-18 ("Automations") and ESI2-2204 ("Attachments") have no
+    // description and no symptom; the tickets that do are their children. Nothing downstream can
+    // act on a container, so say so here instead of letting locate search for the word "Automations".
+    if (/^epic$/i.test(ticket.issuetype || '')) {
+      return { ticket, refusal: { at: 'intake', reason: 'ticket_is_epic',
+        detail: `${ticket.key} is an Epic ("${ticket.summary}") — a container, not a bug. Run one of its child tickets.` } }
+    }
+
+    // The screenshots. Bounded (6 images, 2 MB each); a failed download is a missing image, not a
+    // failed run. See fetchAttachmentImages for why this exists.
+    const images = await fetchAttachmentImages(ticket).catch(() => [])
 
     // Bounded input. Comments are the useful signal (a colleague's root-cause note often IS the
     // answer) but they are also where the corpus embeds credentials — 87% of our tickets did — so
@@ -45,12 +79,32 @@ export function intakeNode({ budget }) {
       '',
       'COMMENTS:',
       ...(ticket.comments || []).slice(0, 8).map((c, i) => `[${i + 1}] ${c.author}: ${c.body.slice(0, 1500)}`),
+      '',
+      images.length
+        ? `SCREENSHOTS (${images.length}, attached in order): ${images.map((i) => i.filename).join(', ')}`
+        : 'SCREENSHOTS: none readable',
     ].join('\n')
 
     const { data, inTok, outTok } = await converseJson({
-      model: tier.model, system: SYSTEM, user, maxTokens: tier.maxTokens,
+      model: tier.model, system: SYSTEM, user, maxTokens: tier.maxTokens, images,
     })
     budget.charge('intake', estimateCost(tier, inTok, outTok), { model: tier.model, inTok, outTok })
+    if (images.length) console.error(`      read ${images.length} screenshot(s) from the ticket`)
+    if (data.symptom?.screen) console.error(`      symptom: ${data.symptom.screen}${data.symptom.errorText ? ` — "${data.symptom.errorText}"` : ''} [${data.symptom.layer || 'unknown'}]`)
+
+    // A re-open is the one shape where a fresh start is worse than no start: the first fix's author
+    // holds the context (ESI2-3194: chaining + loop guard shipped under ESI2-3156, QA confirmed
+    // twice, customer still failing). Hand it back with the prior fix named.
+    if (data.reopened) {
+      return {
+        ticket, spec: data,
+        refusal: {
+          at: 'intake', reason: 'ticket_reopened',
+          detail: `A fix for this was already shipped${data.priorFix ? ` (${data.priorFix})` : ''} and the customer reports it still failing. `
+            + 'This needs the engineer who shipped it, not a second independent attempt.',
+        },
+      }
+    }
 
     if (data.confidence === 'low') {
       return {

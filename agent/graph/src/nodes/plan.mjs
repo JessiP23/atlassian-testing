@@ -61,8 +61,15 @@ export function planNode({ budget, onProgress = () => {} }) {
       return `--- ${p}  (picked because: ${reason})\n${clipped}`
     })
 
+    const sym = s.spec.symptom || {}
     const user = [
       `SPEC: ${s.spec.summary}`,
+      sym.screen
+        ? `SYMPTOM: on "${sym.screen}"${sym.errorText ? `, the error reads "${sym.errorText}"` : ''}${sym.inputs?.length ? `; values involved: ${sym.inputs.join(', ')}` : ''}.`
+          + ` Likely layer: ${sym.layer || 'unknown'}${sym.why ? ` (${sym.why})` : ''}.`
+          + ' Every file in impactedFiles must be on the code path that produces THAT screen for THOSE values.'
+          + ' If none of the candidates is, set needsEscalation and say which layer the fix must live in.'
+        : '',
       `ACCEPTANCE CRITERIA:\n${(s.spec.acceptanceCriteria || []).map((a, i) => `  ${i + 1}. ${a}`).join('\n')}`,
       `NON-GOALS:\n${(s.spec.nonGoals || []).map((a) => `  - ${a}`).join('\n')}`,
       `BUDGET: at most ${PLAN_FILE_TARGET} production files in impactedFiles (hard cap ${DIFF_LIMITS.maxFiles}),`,
@@ -74,8 +81,9 @@ export function planNode({ budget, onProgress = () => {} }) {
         '',
         '## THIS IS A RE-PLAN — the first plan could not be implemented',
         '',
-        'The patch step read the code and stopped without editing anything, because the fix is not',
-        'reachable from the files the previous plan allowed. Its analysis follows. Treat it as the',
+        `The ${esc.from || 'patch'} step read the code and stopped without editing anything, because ${esc.from === 'reproduce'
+          ? 'the files the previous plan allowed cannot produce the ticket\'s symptom for the ticket\'s inputs'
+          : 'the fix is not reachable from the files the previous plan allowed'}. Its analysis follows. Treat it as the`,
         'strongest available evidence: it comes from reading the actual code, not from retrieval.',
         '',
         `Previously allowed (insufficient): ${s.plan?.impactedFiles?.join(', ') || '(none)'}`,

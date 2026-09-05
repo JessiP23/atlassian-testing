@@ -73,4 +73,8 @@ export const S = Annotation.Root({
 })
 
 export const MAX_REPAIR_ATTEMPTS = Number(process.env.PAG_MAX_REPAIR || 3)
-export const MAX_REPLANS = Number(process.env.PAG_MAX_REPLANS || 1)
+// Two, not one: `reproduce` can now send the run back to planning as well as `patch`. One re-plan
+// from each is the normal shape of a run whose retrieval missed (reproduce: "the symptom is built
+// over there"; patch: "and the fix needs this file too"). A re-plan is cents; refusing a run that
+// has already found the right file over a counter is not.
+export const MAX_REPLANS = Number(process.env.PAG_MAX_REPLANS || 2)
