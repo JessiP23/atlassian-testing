@@ -32,6 +32,7 @@ import { reproPathFor, reproCommand, runSpec, sha256, saveEvidence, excerpt,
 import { ensureApp } from '../lib/app.mjs'
 import { parseGateFailures, formatFailures } from '../lib/gatelog.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
+import * as browsermcp from '../lib/browsermcp.mjs'
 
 const exec = promisify(execFile)
 const ATTEMPTS = Number(process.env.PAG_REPRO_ATTEMPTS || 2)
@@ -48,7 +49,12 @@ const REPRO_BUDGET = Number(process.env.PAG_REPRO_BUDGET || 1.5)
 // The phase ceiling is a TOTAL across both attempts, not a fresh allowance per attempt — see
 // Budget.phaseTimeFor. KAN-11 overran 360s -> 553s because this used to recompute from the run's
 // remaining clock, and the overrun was taken out of `patch`.
-const attemptShare = (budget, attempt) => budget.phaseTimeFor('reproduce', ATTEMPTS - attempt + 1)
+// How many attempts the phase can still afford. ESI2-3406: the witness left 150s and this split it
+// in two, so the component rung got 72s, was killed mid-file, and wrote nothing — the floor existed
+// and was then divided into two useless halves. Below 2x the minimum, it is one attempt or none.
+const MIN_ATTEMPT_MS = Number(process.env.PAG_MIN_ATTEMPT_MS || 120_000)
+const attemptsFor = (budget) => (budget.phaseTimeFor('reproduce', 1) >= 2 * MIN_ATTEMPT_MS ? ATTEMPTS : 1)
+const attemptShare = (budget, attempt, attempts = ATTEMPTS) => budget.phaseTimeFor('reproduce', attempts - attempt + 1)
 
 const UI_EVIDENCE = process.env.PAG_UI_EVIDENCE === '1'
 
@@ -84,7 +90,7 @@ function appRoutes(profile) {
   } catch { return [] }
 }
 
-const WITNESS_PROMPT = (s, { specFile, cmd, appUrl, previous, hasLogin, timeMs = 300_000, routes = [] }) => `You are writing a WITNESS for ${s.issueKey}: a Playwright spec that drives the running app
+const WITNESS_PROMPT = (s, { specFile, cmd, appUrl, previous, hasLogin, timeMs = 300_000, routes = [], mcp = false }) => `You are writing a WITNESS for ${s.issueKey}: a Playwright spec that drives the running app
 at ${appUrl} and FAILS because of the bug the ticket reports. You are NOT fixing anything. A separate
 step fixes the code; the app hot-reloads; your spec must then pass unchanged.
 
@@ -147,6 +153,23 @@ only click for the interaction the ticket is actually about.
   settings. Keep it to ONE test.
 - Do not edit any file under ${s.repo}. Do not commit.
 
+${mcp ? `
+## LOOK AT THE APP FIRST — you have browser tools, use them
+\`browser_navigate\`, \`browser_snapshot\`, \`browser_click\`, \`browser_type\`, \`browser_take_screenshot\`.
+\`browser_snapshot\` returns the page's LIVE ACCESSIBILITY TREE — the real roles, names and labels
+Playwright will match on. That is your eyes. The browser is ALREADY SIGNED IN as the QA user.
+
+Work in this order, and do not skip it:
+1. \`browser_navigate\` to ${appUrl}, then \`browser_snapshot\`. Read what is actually on screen.
+2. Click your way to the screen in the ticket, snapshotting after each step. Note the URL when you
+   arrive — that is the route your spec should \`goto\` directly.
+3. Snapshot the element the ticket is about. Copy its real role and name into your assertion.
+4. ONLY THEN write the spec file, using the selectors you just verified and the direct route.
+5. Run the command below ONCE to confirm it fails for the right reason.
+
+Do NOT write a spec that console.logs the DOM so you can read it back — you have a snapshot tool.
+Do NOT guess a selector you have not seen in a snapshot.
+` : ''}
 ## Run it with exactly this command — copy it verbatim, do not reconstruct it
     ${cmd}
 It is absolute and sets both env vars the config reads; a shortened or relative version writes its
@@ -244,6 +267,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
     // A red repro survives a re-plan: it pins the symptom, not the fix location.
     if (s.repro?.status === 'red' && fs.existsSync(path.join(s.repo, s.repro.file))) return {}
 
+    let witnessNote = ''
     const profile = loadProfile(s.repo)
     const isUi = (p) => profile.isUi(p)
     const target = (s.plan?.impactedFiles || []).find((f) => /\.[tj]sx?$/.test(f) && !/\.d\.ts$/.test(f))
@@ -266,7 +290,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
     } else if (rung === 'component' && UI_EVIDENCE) {
       const app = await ensureApp({ repo: s.repo, onProgress })
       if (app) {
-        const w = await witness(s, { budget, onProgress, appUrl: app.url })
+        const w = await witness(s, { budget, onProgress, appUrl: app.url, note: (t) => { witnessNote = t } })
         if (w) return w
         onProgress('witness did not reproduce — falling back to a component test')
       } else onProgress('web-app could not be started — falling back to a component test')
@@ -275,21 +299,22 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
     // No unit runner in this repo (or no source target): the witness above was the only rung.
     const command = specFile && reproCommand(s.repo, specFile)
     if (!command) {
-      return { repro: { status: 'none', rung, reason: specFile
+      return { repro: { status: 'none', rung, witnessNote, reason: specFile
         ? `this repo has no unit test runner (profile ${profile.name}) — ${rung === 'component' ? 'the browser witness could not reproduce it either' : 'a non-UI symptom cannot be proven here'}`
         : 'no source target to write a test against' } }
     }
 
     const tier = tierFor('repro')
     let previous = ''
-    for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+    const attempts = attemptsFor(budget)
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       const allowance = Math.min(REPRO_BUDGET, budget.availableFor('repro'))
-      const timeMs = attemptShare(budget, attempt)
+      const timeMs = attemptShare(budget, attempt, attempts)
       if (allowance < 0.3 || timeMs < 60_000) {
-        return { repro: { status: 'none', reason: `skipped: $${allowance.toFixed(2)} / ${(timeMs / 1000).toFixed(0)}s left`, rung } }
+        return { repro: { status: 'none', witnessNote, reason: `skipped: $${allowance.toFixed(2)} / ${(timeMs / 1000).toFixed(0)}s left`, rung } }
       }
 
-      onProgress(`repro attempt ${attempt}/${ATTEMPTS} (${rung}) -> ${specFile}`)
+      onProgress(`repro attempt ${attempt}/${attempts} (${rung}) -> ${specFile}`)
       const r = await runClaude({
         cwd: s.repo, model: tier.model, budgetUsd: allowance, timeoutMs: timeMs, onProgress,
         prompt: PROMPT(s, { specFile, cmd: command.display, rung, previous }),
@@ -331,7 +356,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
       if (!fs.existsSync(path.join(s.repo, specFile))) {
         const said = (r.text.match(/REPRO:\s*none\s*(.*)/i) || [])[1] || 'no test file was written'
         previous = `Attempt ${attempt} wrote no file. It said: ${said}`
-        if (/REPRO:\s*none/i.test(r.text) || r.timedOut) return { repro: { status: 'none', reason: said.trim(), rung, cost: r.cost } }
+        if (/REPRO:\s*none/i.test(r.text) || r.timedOut) return { repro: { status: 'none', witnessNote, reason: said.trim(), rung, cost: r.cost } }
         continue
       }
 
@@ -341,18 +366,18 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         previous = `Attempt ${attempt}: the test PASSED on the unpatched code, so it does not reproduce the bug. ` +
           'Step 2 was not done or the assertion still describes current behaviour. Invert it to the EXPECTED behaviour.'
         onProgress('repro is green on the unpatched tree — not a reproduction')
-        if (attempt === ATTEMPTS) {
+        if (attempt === attempts) {
           fs.rmSync(path.join(s.repo, specFile), { force: true })
-          return { repro: { status: 'none', reason: 'the test passed on the unpatched code — it does not reproduce the symptom', rung } }
+          return { repro: { status: 'none', witnessNote, reason: 'the test passed on the unpatched code — it does not reproduce the symptom', rung } }
         }
         continue
       }
       if (/\[TIMED OUT\]|Cannot find module|SyntaxError|Test suite failed to run/.test(red.out)) {
         previous = `Attempt ${attempt}: the test did not run:\n${excerpt(red.out)}`
         onProgress('repro did not execute (harness error)')
-        if (attempt === ATTEMPTS) {
+        if (attempt === attempts) {
           fs.rmSync(path.join(s.repo, specFile), { force: true })
-          return { repro: { status: 'none', reason: 'the test could not be executed (harness error)', rung } }
+          return { repro: { status: 'none', witnessNote, reason: 'the test could not be executed (harness error)', rung } }
         }
         continue
       }
@@ -374,9 +399,9 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
           + "ticket's input. Assert on what the current code actually returns or throws for the ticket's example, "
           + 'through the exports that exist today.'
         onProgress('repro is red only because it probes a symbol that does not exist yet — not a reproduction')
-        if (attempt === ATTEMPTS) {
+        if (attempt === attempts) {
           fs.rmSync(path.join(s.repo, specFile), { force: true })
-          return { repro: { status: 'none', reason: 'the only red the test could produce was a probe for a not-yet-written helper — that is not a reproduction of the symptom', rung } }
+          return { repro: { status: 'none', witnessNote, reason: 'the only red the test could produce was a probe for a not-yet-written helper — that is not a reproduction of the symptom', rung } }
         }
         continue
       }
@@ -404,11 +429,11 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
           onProgress(`repro is red but fails the repo's lint (${problems.map((f) => f.rule).filter(Boolean).join(', ')}) — a frozen file cannot be fixed later, so fixing it now`)
           previous = `Attempt ${attempt}: the test correctly FAILED, which is right — but it does not pass this repo's lint, and once frozen nobody can fix it:\n\n${formatFailures(problems)}\n\n`
             + 'Keep the assertions exactly as they are. Fix only the lint problems. For module-boundary errors, import the same way the nearest existing spec in this project imports — do not reach across a package boundary the repo forbids.'
-          if (attempt === ATTEMPTS) {
+          if (attempt === attempts) {
             // Shipping a lint-dirty test into their repo is worse than shipping no test: it breaks
             // their CI on a file the reviewer did not write. Degrade honestly instead.
             fs.rmSync(path.join(s.repo, specFile), { force: true })
-            return { repro: { status: 'none', rung, reason: `a reproducing test was written and it did fail correctly, but it could not be made to pass this repo's lint (${problems.map((f) => f.rule).filter(Boolean).join(', ')}) and a frozen test cannot be fixed afterwards` } }
+            return { repro: { status: 'none', rung, witnessNote, reason: `a reproducing test was written and it did fail correctly, but it could not be made to pass this repo's lint (${problems.map((f) => f.rule).filter(Boolean).join(', ')}) and a frozen test cannot be fixed afterwards` } }
           }
           continue
         }
@@ -424,12 +449,12 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         repro: { status: 'red', file: specFile, sha, rung, cmd: red.cmd, redExcerpt, attempts: attempt },
       }
     }
-    return { repro: { status: 'none', reason: previous || 'exhausted attempts', rung } }
+    return { repro: { status: 'none', witnessNote, reason: previous || 'exhausted attempts', rung } }
   }
 }
 
 /** The witness rung. Returns a red repro (with before-shots) or null to fall back. */
-async function witness(s, { budget, onProgress, appUrl }) {
+async function witness(s, { budget, onProgress, appUrl, note = () => {} }) {
   const specFile = witnessSpecPath(s.issueKey)
   if (!specFile) return null
   const tier = tierFor('repro')
@@ -453,10 +478,18 @@ async function witness(s, { budget, onProgress, appUrl }) {
       return null
     }
 
-    onProgress(`witness attempt ${attempt}/${ATTEMPTS} -> ${specFile}`)
+    // Give it eyes. See lib/browsermcp.mjs for the three runs that made this necessary.
+    let mcpConfig = null
+    if (browsermcp.mcpEnabled() && HAS_LOGIN()) {
+      const statePath = await browsermcp.loginState({ appUrl, onProgress })
+      mcpConfig = browsermcp.writeConfig({ statePath, outDir: path.join(path.dirname(specFile), 'authoring') })
+      if (mcpConfig) onProgress(`authoring browser: on${statePath ? ', already signed in' : ' (signed out)'}`)
+    }
+
+    onProgress(`witness attempt ${attempt}/${WITNESS_ATTEMPTS} -> ${specFile}`)
     const r = await runClaude({
-      cwd: s.repo, model: tier.model, budgetUsd: allowance, timeoutMs: timeMs, onProgress,
-      prompt: WITNESS_PROMPT(s, { specFile, cmd, appUrl, previous, hasLogin: HAS_LOGIN(), timeMs, routes: appRoutes(loadProfile(s.repo)) }),
+      cwd: s.repo, model: tier.model, budgetUsd: allowance, timeoutMs: timeMs, onProgress, mcpConfig,
+      prompt: WITNESS_PROMPT(s, { specFile, cmd, appUrl, previous, hasLogin: HAS_LOGIN(), timeMs, routes: appRoutes(loadProfile(s.repo)), mcp: Boolean(mcpConfig) }),
     })
     budget.charge('repro', r.cost, { model: tier.model, attempt, subtype: r.subtype, exit: r.code, rung: 'e2e' })
 
@@ -480,6 +513,8 @@ async function witness(s, { budget, onProgress, appUrl }) {
     const red = await runWitness(specFile, 'before')
     if (red.ok) {
       previous = `Attempt ${attempt}: the spec PASSED against the unpatched app, so it does not witness the bug. Invert the final assertion to the EXPECTED behaviour.`
+      note('the browser witness signed in and reached the screen, but the symptom was NOT VISIBLE for this account — '
+        + 'the tab was already showing before any fix. This account most likely does not carry the custom role the ticket describes.')
       onProgress('witness is green on the unpatched app — not a reproduction')
       if (attempt === ATTEMPTS) { fs.rmSync(specFile, { force: true }); return null }
       continue
@@ -517,6 +552,7 @@ async function witness(s, { budget, onProgress, appUrl }) {
         : 'it failed on navigation, not on an assertion — it never reached the screen under test'
       previous = `Attempt ${attempt}: the spec failed, but ${why}, so it does not witness the bug. `
         + `Get to the screen with fewer, more reliable steps and assert there. Playwright said:\n${excerpt(red.out)}`
+      note(`the browser witness signed in but ${why}, so it could not judge the symptom`)
       onProgress(`witness failed before reaching the screen (${why}) — not a reproduction`)
       fs.rmSync(specFile, { force: true })
       return null

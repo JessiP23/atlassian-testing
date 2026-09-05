@@ -130,3 +130,17 @@ test('a witnessed UI run does not carry that explanation', () => {
   }
   assert.doesNotMatch(evidenceBlock(s, {}, (f) => f, null), /Why there are no app screenshots/)
 })
+
+test("the witness's own finding reaches the PR, not just 'no test file was written'", () => {
+  const s = {
+    issueKey: 'ESI2-3406', baseBranch: 'main', baseSha: 'abc1234',
+    repro: {
+      status: 'none', reason: 'no test file was written',
+      witnessNote: 'the browser witness signed in and reached the screen, but the symptom was NOT VISIBLE for this account',
+    },
+    gate: { ok: true, summary: 'green' }, scope: { owners: ['clients-web-app'] },
+  }
+  const out = evidenceBlock(s, { maxMinutes: 30 }, (f) => `E/${f}`, null)
+  assert.match(out, /The browser witness ran/)
+  assert.match(out, /NOT VISIBLE for this account/)
+})

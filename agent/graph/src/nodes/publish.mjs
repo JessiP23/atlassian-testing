@@ -136,6 +136,10 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
       `**No reproducing test.** ${r?.reason ? r.reason : 'The reproduce step did not run.'}`,
       'The gate below proves no regressions in the owning projects; it does not prove the reported symptom is gone. Review the diff against the acceptance criteria.',
     )
+    // What the browser witness actually found. "no test file was written" is true and useless when
+    // the witness DID run, signed in and looked: on ESI2-3406 it reported the tab already visible
+    // for this account, which is a finding about the ACCOUNT and belongs in front of a reviewer.
+    if (r?.witnessNote) lines.push('', `> **The browser witness ran.** ${r.witnessNote}`)
     // The gate transcript, rendered. Not a substitute for a red-to-green pair, and labelled as such
     // — but a reviewer of a no-repro PR should still see the output of the commands that ran.
     if (terminal?.gate) {

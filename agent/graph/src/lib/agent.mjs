@@ -33,7 +33,7 @@ export function parseStream(lines) {
 /**
  * @returns {Promise<{code:number, cost:number, subtype:string, text:string, timedOut:boolean}>}
  */
-export function runClaude({ cwd, prompt, model, budgetUsd, timeoutMs, onProgress = () => {}, disallowed = GIT_DENYLIST }) {
+export function runClaude({ cwd, prompt, model, budgetUsd, timeoutMs, onProgress = () => {}, disallowed = GIT_DENYLIST, mcpConfig = null }) {
   const args = [
     '-p', prompt,
     '--model', model,
@@ -44,7 +44,9 @@ export function runClaude({ cwd, prompt, model, budgetUsd, timeoutMs, onProgress
     '--dangerously-skip-permissions',
     '--disallowedTools', ...disallowed,
   ]
-  if (process.env.PAG_MCP_CONFIG) args.push('--strict-mcp-config', '--mcp-config', process.env.PAG_MCP_CONFIG)
+  // Per-call beats the env var: only the witness gets a browser, and only for the run that asked.
+  const mcp = mcpConfig || process.env.PAG_MCP_CONFIG
+  if (mcp) args.push('--strict-mcp-config', '--mcp-config', mcp)
 
   const lines = []
   let timedOut = false
