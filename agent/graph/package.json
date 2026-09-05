@@ -18,7 +18,8 @@
     "doctor": "node bin/doctor.mjs --repo ${PAG_PRODUCT:-$HOME/pioneer}",
     "dry": "node bin/ci.mjs --repo ${PAG_WORKTREE:-$HOME/pioneer-agent} --base ${PAG_BASE:-main} --dry-run",
     "live": "node bin/ci.mjs --repo ${PAG_WORKTREE:-$HOME/pioneer-agent} --base ${PAG_BASE:-main}",
-    "jira": "node bin/jira-transition.mjs"
+    "jira": "node bin/jira-transition.mjs",
+    "login": "node bin/login-state.mjs"
   },
   "engines": {
     "node": ">=20"

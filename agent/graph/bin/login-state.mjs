@@ -7,6 +7,7 @@
 // @playwright/mcp loads with --storage-state. The password never enters the model's transcript.
 //
 //   node bin/login-state.mjs [--url http://localhost:3000] [--out .pag/login-state.json]
+import '../src/lib/boot.mjs'   // loads graph/.env before anything reads process.env
 import fs from 'node:fs'
 import path from 'node:path'
 import { chromium } from 'playwright'
