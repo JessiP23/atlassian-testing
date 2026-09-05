@@ -111,6 +111,20 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
       `**No reproducing test.** ${r?.reason ? r.reason : 'The reproduce step did not run.'}`,
       'The gate below proves no regressions in the owning projects; it does not prove the reported symptom is gone. Review the diff against the acceptance criteria.',
     )
+    // The gate transcript, rendered. Not a substitute for a red-to-green pair, and labelled as such
+    // — but a reviewer of a no-repro PR should still see the output of the commands that ran.
+    if (terminal?.gate) {
+      lines.push('', `![the gate on the patched tree](${href(terminal.gate)})`,
+        '_The gate only. There is no before/after here because no reproducing test was written._')
+    }
+    // Why the UI was never pictured, in the PR rather than only in a run log. `PAG_UI_EVIDENCE=1`
+    // with no credentials is the shape that produced a UI ticket with zero screenshots.
+    if (/authenticated session|could not sign in|cannot sign in/i.test(String(r?.reason || ''))
+      || (process.env.PAG_UI_EVIDENCE === '1' && !process.env.PAG_APP_PASSWORD)) {
+      lines.push('', '> ⚠ **No UI screenshots.** The browser witness needs a QA account to reach the screen in the '
+        + 'ticket, and none is configured for this environment, so it could only see the signed-out pages. '
+        + 'Set `PAG_APP_EMAIL` / `PAG_APP_PASSWORD` to a qa user and re-run to get before/after screenshots.')
+    }
   }
   lines.push(
     '',
@@ -167,6 +181,11 @@ async function pushEvidence({ repo, remote, slug, issueKey, runId }) {
   const wdir = path.join(src, 'witness')
   if (fs.existsSync(wdir)) for (const f of fs.readdirSync(wdir)) fs.copyFileSync(path.join(wdir, f), path.join(dest, f))
   await g(['add', '-A', '--', path.join(issueKey, runId)])
+  // Nothing to publish is a normal outcome (no repro, no witness, termshot disabled), and `git
+  // commit` exits 1 on an empty index. Reporting that as "evidence branch failed" sent ESI2-3406's
+  // reviewer looking for a broken push when the real answer was "there were no files".
+  const { stdout: staged } = await g(['diff', '--cached', '--name-only'])
+  if (!staged.trim()) { fs.rmSync(tmp, { recursive: true, force: true }); return null }
   await g(['-c', 'user.name=panda-agent', '-c', 'user.email=panda-agent@assetpanda.com', 'commit', '-q', '-m', `${issueKey}: evidence for run ${runId}`])
   await g(['push', '-q', 'origin', `HEAD:refs/heads/${EVIDENCE_BRANCH}`])
   fs.rmSync(tmp, { recursive: true, force: true })
@@ -472,6 +491,24 @@ export function publishNode({ budget, dryRun = false }) {
       if (before || after) {
         terminal = { before: before && path.basename(before), after: after && path.basename(after) }
         console.error(`rendered the transcript: ${Object.values(terminal).filter(Boolean).join(', ')}`)
+      }
+    }
+
+    // No red/green pair — no reproducing test was written, or the witness could not sign in. The
+    // run still executed real commands, and their output is the only proof a reviewer can check.
+    // Render THAT. A PR with no picture of any command reads as a PR nobody ran anything for.
+    if (!terminal && process.env.PAG_RUN_DIR && process.env.PAG_TERMSHOT !== '0') {
+      const gateLog = readEvidence('gate.log')
+      if (gateLog) {
+        const img = await termshot({
+          text: gateLog, name: 'terminal-gate', pass: Boolean(s.gate?.ok),
+          title: `nx lint + test + build · ${(s.scope?.owners || []).join(', ') || 'owning project'}`,
+          subtitle: `${s.issueKey} · the gate on the patched tree — no reproducing test in this run`,
+        })
+        if (img) {
+          terminal = { gate: path.basename(img) }
+          console.error(`rendered the transcript: ${path.basename(img)}`)
+        }
       }
     }
 

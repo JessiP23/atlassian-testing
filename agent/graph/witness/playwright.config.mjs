@@ -36,5 +36,7 @@ export default defineConfig({
     navigationTimeout: 30_000,
     ignoreHTTPSErrors: true,
   },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  // PAG_HEADED=1 opens a real browser window so the run can be watched while it happens. Off by
+  // default: a headed run needs a display, and CI has none.
+  projects: [{ name: 'chromium', use: { browserName: 'chromium', headless: process.env.PAG_HEADED !== '1' } }],
 })

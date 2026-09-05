@@ -209,6 +209,13 @@ export function verifyNode({ budget, onProgress = () => {} } = {}) {
       warmApp({ repo: s.repo, onProgress })
     }
 
+    // The gate's own transcript, kept whether it passed or failed. This is the ONLY command output
+    // a run without a reproducing test produces, and publish renders it as the PR's terminal image
+    // — ESI2-3406 shipped with no picture of anything because nothing was ever saved here.
+    saveEvidence('gate.log', results.map(({ target, projects, ok, out }) =>
+      `$ nx run-many -t ${target} -p ${projects.join(',')}\n${String(out || '').trim() || '(no output)'}\n${ok ? `PASS  ${target}` : `FAIL  ${target}`}\n`
+    ).join('\n'))
+
     for (const { target, projects, ok, out } of results) {
       if (ok) continue
       const failures = parseGateFailures(out, target)

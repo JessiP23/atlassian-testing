@@ -207,7 +207,17 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
     // Witness rung: only for web-app targets, only when enabled, only if the app comes up.
     // A backend-only diff never climbs here — against the shared backend the client would show the
     // OLD behaviour and the "evidence" would be a lie.
-    if (rung === 'component' && UI_EVIDENCE) {
+    //
+    // AND only when it can actually reach the symptom. ESI2-3406's symptom is a tab inside a record
+    // detail view; without credentials the witness can see /login, /signup and /forgot-password and
+    // nothing else, so it spent 187s and $0.29 to answer "needs an authenticated session" — an
+    // answer that was knowable before it started — and left the component rung 173s, in which it
+    // wrote nothing. So: no credentials AND a real unit runner to fall back on -> skip straight to
+    // it. A repo with NO unit runner still tries, because there the witness is the only rung.
+    if (rung === 'component' && UI_EVIDENCE && !HAS_LOGIN() && profile.hasUnitRunner(s.repo)) {
+      onProgress('witness skipped: PAG_APP_EMAIL/PAG_APP_PASSWORD are not set, so it cannot sign in — '
+        + 'the whole reproduce budget goes to the component test instead')
+    } else if (rung === 'component' && UI_EVIDENCE) {
       const app = await ensureApp({ repo: s.repo, onProgress })
       if (app) {
         const w = await witness(s, { budget, onProgress, appUrl: app.url })

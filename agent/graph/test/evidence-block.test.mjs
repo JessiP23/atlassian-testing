@@ -57,3 +57,30 @@ test('no reproducing test says so plainly instead of implying proof', () => {
   assert.match(md, /No reproducing test/)
   assert.match(md, /does not prove the reported symptom is gone/)
 })
+
+test('a no-repro run still shows the gate transcript and says why there are no UI shots', () => {
+  const s = {
+    issueKey: 'ESI2-3406', baseBranch: 'main', baseSha: 'abcdef1234',
+    repro: { status: 'none', reason: 'needs an authenticated session' },
+    gate: { ok: true, summary: 'green across 1 owning project(s)' },
+    scope: { owners: ['clients-web-app'] },
+  }
+  const out = evidenceBlock(s, { maxMinutes: 30 }, (f) => `E/${f}`, { gate: 'terminal-gate.png' })
+  assert.match(out, /No reproducing test/)
+  assert.match(out, /!\[the gate on the patched tree\]\(E\/terminal-gate\.png\)/)
+  assert.match(out, /No UI screenshots/)
+  assert.match(out, /PAG_APP_EMAIL/)
+})
+
+test('a red-to-green run is unchanged by the gate-only fallback', () => {
+  const s = {
+    issueKey: 'ESI2-3393', baseBranch: 'main', baseSha: 'abcdef1234',
+    repro: { status: 'red', file: 'a/b.repro.test.ts', sha: 'deadbeefcafe', cmd: 'npx nx run p:test', redExcerpt: 'FAIL' },
+    evidence: { reproGreen: true, greenExcerpt: 'PASS' },
+    gate: { ok: true, summary: 'green' }, scope: { owners: ['p'] },
+  }
+  const out = evidenceBlock(s, { maxMinutes: 30 }, (f) => `E/${f}`, { before: 'terminal-before.png', after: 'terminal-after.png' })
+  assert.doesNotMatch(out, /No UI screenshots/)
+  assert.doesNotMatch(out, /the gate on the patched tree/)
+  assert.match(out, /terminal-before\.png/)
+})
