@@ -103,7 +103,10 @@ ${s.plan.impactedFiles.map((f) => `- ${f}`).join('\n')}
 Start from:
     import { test, expect, check, ${hasLogin ? 'login, ' : ''}shot } from '${WITNESS_FIXTURES}'
 ${hasLogin
-  ? `- \`login(page)\` signs in as the QA user (env-provided; never hard-code credentials).`
+  ? `- \`login(page)\` signs in as the QA user (env-provided; never hard-code credentials). It handles
+  this app's real sign-in flow, one-step or two-step, and returns once the app has LEFT /login.
+  Do not write your own login, and do not \`waitForURL\` a specific landing route afterwards — the
+  app chooses where to land. Assert \`await expect(page).not.toHaveURL(/\\/login/)\` and go on.`
   : `- THERE IS NO USABLE LOGIN in this environment. Do NOT import or call \`login\`, do not type any
   credentials, and do not try to reach a screen behind authentication. You may only visit pages that
   render WITHOUT signing in: \`/login\`, \`/signup\`, \`/forgot-password\`. If the ticket's symptom is
@@ -498,10 +501,23 @@ async function witness(s, { budget, onProgress, appUrl }) {
     // it: the product fix was correct, verify re-ran the same blind spec, it timed out again, and a
     // correct patch shipped as an INCOMPLETE hand-over. A witness that captured nothing is worth
     // strictly less than no witness, because it also blocks the rung that would have worked.
-    if (!before.shots.length) {
-      previous = `Attempt ${attempt}: the spec failed but captured NO screenshots — it never reached the screen. `
-        + `Playwright said:\n${excerpt(red.out)}`
-      onProgress('witness failed without reaching the screen (0 screenshots) — not a reproduction')
+    // A red is only a reproduction when an ASSERTION failed. Playwright says
+    // `Error: expect(locator).toBeVisible() failed` for that, and `TimeoutError: page.waitForURL`
+    // or `locator.click: Timeout` when the spec never got to the thing it was testing.
+    //
+    // ESI2-3406 twice: first with 0 screenshots (blind hunt, page closed before any could be
+    // taken), then with 2 (login shot + failure frame) dying on `waitForURL(/\/home/)` because the
+    // app lands somewhere else after sign-in. Both look red. Neither witnessed the Attachments tab.
+    // Accepting them made the run hostage to a spec no patch could turn green, and a correct fix
+    // shipped as an INCOMPLETE hand-over.
+    const assertionFailed = /Error:\s*expect\(/.test(red.out)
+    if (!before.shots.length || !assertionFailed) {
+      const why = !before.shots.length
+        ? 'it captured no screenshots at all'
+        : 'it failed on navigation, not on an assertion — it never reached the screen under test'
+      previous = `Attempt ${attempt}: the spec failed, but ${why}, so it does not witness the bug. `
+        + `Get to the screen with fewer, more reliable steps and assert there. Playwright said:\n${excerpt(red.out)}`
+      onProgress(`witness failed before reaching the screen (${why}) — not a reproduction`)
       fs.rmSync(specFile, { force: true })
       return null
     }
