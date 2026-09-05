@@ -53,6 +53,19 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
   const r = s.repro
   const e = s.evidence
   const lines = ['## Evidence']
+
+  // What the customer actually saw, first — before anything the agent produced. On a ticket the
+  // agent cannot drive (no login, a backend symptom, a customer-specific record) this is the only
+  // image in the PR, and it is still worth having: it is the reviewer's reference for what "fixed"
+  // has to mean. These are the ticket's own attachments, re-hosted on the evidence branch because
+  // Jira's attachment URLs need auth and render as broken images on GitHub.
+  const shots = s.ticketShots || []
+  if (shots.length) {
+    lines.push('', `<details${shots.length <= 2 ? ' open' : ''}><summary><b>Reported in the ticket</b> — ${shots.length} screenshot(s) from ${s.issueKey}</summary>`, '')
+    for (const t of shots) lines.push(`![${t.name}](${href(t.file)})`, '')
+    lines.push('</details>', '')
+  }
+
   if (r?.status === 'red' && e?.reproGreen) {
     const isE2e = r.rung === 'e2e'
     lines.push(

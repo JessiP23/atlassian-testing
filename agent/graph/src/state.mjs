@@ -48,6 +48,11 @@ export const S = Annotation.Root({
   // keeping: it has already read the code and named the file. `escalation` carries that forward so
   // planning can widen the allowlist instead of the run being thrown away.
   escalation: last(),   // { text, neededFiles[] }
+
+  // The reporter's own screenshots, saved into evidence/ by intake. They are what the customer
+  // SAW; the witness pair is what the agent PROVED. A reviewer wants both side by side, so these
+  // ride to the evidence branch with everything else and get their own row in the PR body.
+  ticketShots: last(),  // [{ file, name }]
   replans: Annotation({ reducer: (a, b) => (b ?? 0), default: () => 0 }),
 
   // ---- output -------------------------------------------------------------------------------

@@ -8,6 +8,7 @@
 import { converseJson } from '../lib/bedrock.mjs'
 import { tierFor, estimateCost } from '../lib/models.mjs'
 import { fetchIssue, probeIssue, fetchAttachmentImages } from '../lib/jira.mjs'
+import { saveEvidence } from '../lib/repro.mjs'
 
 const SYSTEM = `You convert a bug/feature ticket into an executable spec for a code-fixing agent.
 
@@ -66,6 +67,16 @@ export function intakeNode({ budget }) {
     // failed run. See fetchAttachmentImages for why this exists.
     const images = await fetchAttachmentImages(ticket).catch(() => [])
 
+    // Keep them. They are the only picture of the bug AS REPORTED, and on a ticket where the agent
+    // cannot drive the UI they are the only picture at all. Saved into evidence/ so pushEvidence
+    // carries them to the evidence branch like any other artefact, and the PR can show them beside
+    // whatever the run proved. `ticket-NN-` sorts them into the reporter's own order.
+    const ticketShots = images.map((img, i) => {
+      const safe = String(img.filename || `image-${i + 1}`).replace(/[^\w.-]+/g, '-').slice(-60)
+      const file = `ticket-${String(i + 1).padStart(2, '0')}-${safe.endsWith(`.${img.format}`) ? safe : `${safe}.${img.format}`}`
+      return saveEvidence(file, img.bytes) ? { file, name: img.filename || file } : null
+    }).filter(Boolean)
+
     // Bounded input. Comments are the useful signal (a colleague's root-cause note often IS the
     // answer) but they are also where the corpus embeds credentials — 87% of our tickets did — so
     // fetchIssue() redacts at the fetch boundary before anything reaches a model.
@@ -95,9 +106,12 @@ export function intakeNode({ budget }) {
     // A re-open is the one shape where a fresh start is worse than no start: the first fix's author
     // holds the context (ESI2-3194: chaining + loop guard shipped under ESI2-3156, QA confirmed
     // twice, customer still failing). Hand it back with the prior fix named.
-    if (data.reopened) {
+    // A deliberate override for when a human has decided to point the agent at a re-open anyway.
+    if (data.reopened && process.env.PAG_ALLOW_REOPEN === '1') {
+      console.error(`      re-open detected${data.priorFix ? ` (${data.priorFix})` : ''} — continuing because PAG_ALLOW_REOPEN=1`)
+    } else if (data.reopened) {
       return {
-        ticket, spec: data,
+        ticket, spec: data, ticketShots,
         refusal: {
           at: 'intake', reason: 'ticket_reopened',
           detail: `A fix for this was already shipped${data.priorFix ? ` (${data.priorFix})` : ''} and the customer reports it still failing. `
@@ -108,7 +122,7 @@ export function intakeNode({ budget }) {
 
     if (data.confidence === 'low') {
       return {
-        ticket, spec: data,
+        ticket, spec: data, ticketShots,
         refusal: {
           at: 'intake',
           reason: 'ticket_underspecified',
@@ -116,6 +130,7 @@ export function intakeNode({ budget }) {
         },
       }
     }
-    return { ticket, spec: data }
+    if (ticketShots.length) console.error(`      kept ${ticketShots.length} ticket screenshot(s) for the PR`)
+    return { ticket, spec: data, ticketShots }
   }
 }

@@ -84,3 +84,23 @@ test('a red-to-green run is unchanged by the gate-only fallback', () => {
   assert.doesNotMatch(out, /the gate on the patched tree/)
   assert.match(out, /terminal-before\.png/)
 })
+
+test("the ticket's own screenshots lead the Evidence section and are re-hosted, not linked to Jira", () => {
+  const s = {
+    issueKey: 'ESI2-3406', baseBranch: 'main', baseSha: 'abcdef1234',
+    ticketShots: [{ file: 'ticket-01-tab-missing.png', name: 'tab-missing.png' }],
+    repro: { status: 'none', reason: 'needs an authenticated session' },
+    gate: { ok: true, summary: 'green' }, scope: { owners: ['w'] },
+  }
+  const out = evidenceBlock(s, { maxMinutes: 30 }, (f) => `E/${f}`, null)
+  assert.match(out, /Reported in the ticket/)
+  assert.match(out, /!\[tab-missing\.png\]\(E\/ticket-01-tab-missing\.png\)/)
+  assert.doesNotMatch(out, /atlassian\.net/)
+  // and it comes before the run's own findings
+  assert.ok(out.indexOf('Reported in the ticket') < out.indexOf('No reproducing test'))
+})
+
+test('a ticket with no screenshots gets no empty section', () => {
+  const s = { issueKey: 'X-1', baseBranch: 'main', baseSha: 'abc', repro: { status: 'none' }, gate: {} }
+  assert.doesNotMatch(evidenceBlock(s, {}, (f) => f, null), /Reported in the ticket/)
+})
