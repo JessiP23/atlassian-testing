@@ -104,12 +104,22 @@ export async function converse({ model, system, user, maxTokens = 4096, json = f
       await sleep(wait)
     }
   }
+  // Say what actually happened. This used to claim "6 attempts" and "a 503 here is regional
+  // capacity" for EVERY failure — including AccessDeniedException, which is not retryable and
+  // breaks on the first try. Reporting a permissions error as a capacity error sends the reader to
+  // change models when no model will work.
+  const name = last?.name || 'unknown'
+  const denied = /AccessDenied|UnrecognizedClient|InvalidSignature|ExpiredToken/i.test(name)
   const tried = [...new Set(chain.slice(0, Math.min(Math.ceil(ATTEMPTS / 2), chain.length)))].join(', ')
-  throw new Error(
-    `Bedrock could not serve ${model} after ${ATTEMPTS} attempts across ${tried}: ${last?.name || 'unknown'}. ` +
-    'A 503 here is regional capacity, not a bad request — re-run, or set PAG_MODEL_FAST / PAG_MODEL_HEAVY ' +
-    'to a profile with room (global.<id> is usually the answer).'
-  )
+  throw new Error(denied
+    ? `Bedrock refused ${model}: ${name}. This is PERMISSIONS, not capacity — retrying or switching `
+      + `models will not help if the identity is the problem. Check, in this order: the IAM identity `
+      + `these credentials resolve to still has bedrock:InvokeModel (a budget guardrail can attach a `
+      + `deny policy to it), the credentials have not expired, and this model is enabled for the `
+      + `account in Bedrock -> Model access.`
+    : `Bedrock could not serve ${model} after ${ATTEMPTS} attempts across ${tried}: ${name}. `
+      + `A 503 here is regional capacity, not a bad request — re-run, or set PAG_MODEL_FAST / `
+      + `PAG_MODEL_HEAVY to a profile with room (global.<id> is usually the answer).`)
 }
 
 /**

@@ -22,10 +22,22 @@ export const shadowed = [...(loadEnv.shadowed || [])]
 // an unambiguous statement of which identity to use, so drop the profile (and any stale session
 // token) for this process. Without it an expired SSO session produces
 // `ExpiredTokenException ... 403` from Bedrock while perfectly good keys sit unused in the file.
-if (process.env.AWS_PROFILE && process.env.AWS_ACCESS_KEY_ID) {
-  delete process.env.AWS_PROFILE
-  delete process.env.AWS_SESSION_TOKEN
-  delete process.env.AWS_SECURITY_TOKEN
+//
+// THE BUG THIS FIXES: the condition required AWS_PROFILE to be set before the session token was
+// cleared. A shell holding a stale SSO `AWS_SESSION_TOKEN` but NO AWS_PROFILE therefore kept that
+// token, and the SDK paired it with the FILE's static access key — which is not a valid identity
+// at all. Bedrock answers that with AccessDeniedException, which reads exactly like a revoked
+// permission or a tripped budget guardrail. And it appears the moment the SSO session expires:
+// working one hour, denied the next, with nothing on the AWS side having changed.
+//
+// So each variable is now dropped on its own merit, whenever the file supplies static keys.
+if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+  for (const k of ['AWS_PROFILE', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN']) {
+    if (process.env[k]) {
+      if (process.env.PAG_QUIET_ENV !== '1') console.error(`  note: ignoring ${k} from your shell — graph/.env supplies static credentials`)
+      delete process.env[k]
+    }
+  }
 }
 
 // Loud, once, at startup. Silent shadowing costs more time than a hard failure would.
