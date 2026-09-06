@@ -8,6 +8,7 @@
 // Real environment variables always win over the file, so CI and ECS task definitions are never
 // overridden by a stale local .env.
 
+import fs from 'node:fs'
 import path from 'node:path'
 import { loadEnv } from '../../../src/lib/env.mjs'
 
@@ -31,12 +32,31 @@ export const shadowed = [...(loadEnv.shadowed || [])]
 // working one hour, denied the next, with nothing on the AWS side having changed.
 //
 // So each variable is now dropped on its own merit, whenever the file supplies static keys.
-if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+// The shell's profile is still the right identity for one thing: the backend deploy, which needs the
+// developer's SSO role (CDK, SSM, Cognito), not the bot's static Bedrock keys. Remember it before it is
+// dropped — nodes/deploy.mjs reads PAG_SHELL_AWS_PROFILE and never the file's keys.
+if (process.env.AWS_PROFILE && !process.env.PAG_SHELL_AWS_PROFILE) process.env.PAG_SHELL_AWS_PROFILE = process.env.AWS_PROFILE
+
+// Which identity, decided by the FILE, not by whatever the shell happens to hold:
+//   graph/.env defines AWS_ACCESS_KEY_ID  → static identity (a bot user): drop the shell's profile/token.
+//   graph/.env has no static keys         → the shell's SSO profile: drop the shell's static keys, which
+//     are leftovers of an `aws configure export-credentials` / `set -a; . .env` and expire within the hour
+//     (the doctor read that as UnrecognizedClientException the first time).
+const fileHasStaticKeys = ['.env', '.env.local'].some((n) => {
+  try { return /^AWS_ACCESS_KEY_ID=\S/m.test(fs.readFileSync(path.join(GRAPH_DIR, n), 'utf8')) } catch { return false }
+})
+if (fileHasStaticKeys) {
   for (const k of ['AWS_PROFILE', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN']) {
     if (process.env[k]) {
       if (process.env.PAG_QUIET_ENV !== '1') console.error(`  note: ignoring ${k} from your shell — graph/.env supplies static credentials`)
       delete process.env[k]
     }
+  }
+} else {
+  const stale = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN'].filter((k) => process.env[k])
+  if (stale.length) {
+    if (process.env.PAG_QUIET_ENV !== '1') console.error(`  note: ignoring ${stale.join(', ')} exported in your shell — graph/.env has no static keys; using AWS_PROFILE=${process.env.AWS_PROFILE || 'default'} (SSO)`)
+    for (const k of stale) delete process.env[k]
   }
 }
 

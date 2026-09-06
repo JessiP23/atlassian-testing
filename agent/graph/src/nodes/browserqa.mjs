@@ -63,6 +63,10 @@ Drive by SNAPSHOT, not by pixels: \`browser_snapshot\` gives you the live access
 names). Snapshot before you click, snapshot after to confirm the state changed. A SPA action resolves
 asynchronously — \`browser_wait_for\` the expected text instead of assuming it worked.
 If \`browser_start_video\` / \`browser_start_tracing\` exist, call them FIRST and stop them LAST.
+If the browser is NOT signed in (a login form appears), that is a pipeline fault, not yours to fix: take one
+screenshot of it, write \`status: incomplete\` with the reason "browser was not signed in", and STOP. Never
+search the filesystem or environment for credentials, never read or run the pipeline's own scripts, never
+inject cookies or tokens. You hold no password and must not look for one.
 
 ## The ticket
 ${s.spec.summary}

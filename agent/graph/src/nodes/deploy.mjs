@@ -62,12 +62,30 @@ export function parseDotenv(text) {
   return out
 }
 
-/** `aws configure export-credentials --format env` → { AWS_ACCESS_KEY_ID, ... } or null. */
+const STATIC_KEYS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN']
+/** process.env without the static keys graph/.env supplies — the deploy must not run as the bot user. */
+function envWithoutStaticKeys() {
+  const e = { ...process.env }
+  for (const k of STATIC_KEYS) delete e[k]
+  if (e.PAG_SHELL_AWS_PROFILE) e.AWS_PROFILE = e.PAG_SHELL_AWS_PROFILE
+  return e
+}
+
+/**
+ * The developer's SSO credentials, as static env values both AWS SDKs honour first. Resolved from the
+ * SHELL's profile (boot.mjs saves it as PAG_SHELL_AWS_PROFILE) with the file's keys removed — the first
+ * run resolved `export-credentials` on top of graph/.env and got the bot user `panda-code-agent`, whose
+ * policy allows Bedrock and nothing else: describe-stacks denied → "no stacks" → a doomed infra build.
+ */
 async function exportCredentials() {
   try {
-    const { stdout } = await exec('aws', ['configure', 'export-credentials', '--format', 'env'], { timeout: 30_000 })
+    const args = ['configure', 'export-credentials', '--format', 'env']
+    if (process.env.PAG_SHELL_AWS_PROFILE) args.push('--profile', process.env.PAG_SHELL_AWS_PROFILE)
+    const { stdout } = await exec('aws', args, { env: envWithoutStaticKeys(), timeout: 30_000 })
     const creds = parseDotenv(stdout)
-    return creds.AWS_ACCESS_KEY_ID ? creds : null
+    if (!creds.AWS_ACCESS_KEY_ID) return null
+    const { stdout: who } = await exec('aws', ['sts', 'get-caller-identity', '--query', 'Arn', '--output', 'text'], { env: { ...envWithoutStaticKeys(), ...creds }, timeout: 30_000 })
+    return { ...creds, arn: who.trim() }
   } catch { return null }
 }
 
@@ -133,11 +151,14 @@ export function deployNode({ budget, onProgress = () => {} }) {
     const envLocal = productDir && path.join(productDir, '.env.local')
     if (!envLocal || !fs.existsSync(envLocal)) return skip(`no .env.local in the product checkout (${productDir || '?'}) — the deploy env (hosted zone, account id) lives there`)
     const creds = await exportCredentials()
-    if (!creds) return skip('no AWS credentials from the SSO session — run `aws sso login` before the run')
+    if (!creds) return skip(`no AWS credentials from the SSO session (profile ${process.env.PAG_SHELL_AWS_PROFILE || 'default'}) — run \`aws sso login\` before the run`)
+    if (/:user\/panda-code-agent$/.test(creds.arn)) return skip(`the resolved identity is the bot user (${creds.arn}) — the deploy needs your SSO role; run \`aws sso login\` and set AWS_PROFILE in the shell`)
+    const { arn, ...credEnv } = creds
+    onProgress(`deploy: as ${arn}`)
 
     const versionId = versionIdFor(s.issueKey)
     const env = {
-      ...process.env, ...parseDotenv(fs.readFileSync(envLocal, 'utf8')), ...creds,
+      ...envWithoutStaticKeys(), ...parseDotenv(fs.readFileSync(envLocal, 'utf8')), ...credEnv,
       AWS_ENV: 'dev', AP_VERSION_ID: versionId, BRANCH_NAME: s.branchName || `agent/${s.issueKey}-fix`,
       CDK_DISABLE_NOTICES: '1', FORCE_COLOR: '0', NX_DAEMON: 'false',
     }
