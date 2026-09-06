@@ -59,7 +59,7 @@ test('hasTimeFor is the gate the graph routes on', () => {
 })
 
 test('the phase order matches the graph, or the reserves are computed against the wrong future', () => {
-  assert.deepEqual(PHASE_ORDER, ['intake', 'locate', 'planning', 'reproduce', 'patch', 'verify', 'repair', 'browserqa', 'package', 'publish'])
+  assert.deepEqual(PHASE_ORDER, ['intake', 'locate', 'planning', 'reproduce', 'patch', 'verify', 'repair', 'deploy', 'browserqa', 'package', 'publish'])
   for (const n of PHASE_ORDER) assert.ok(PHASES[n], `${n} is in the order but has no phase entry`)
 })
 
@@ -82,4 +82,13 @@ test('phases are recorded for the PR footer', () => {
   const b = at(0)
   b.recordPhase('patch', 186_000)
   assert.deepEqual(b.report().phases, [{ node: 'patch', ms: 186_000 }])
+})
+
+test('excluded build time does not count against the deadline', async () => {
+  const { Budget } = await import('../src/lib/budget.mjs')
+  const b = new Budget({ maxMinutes: 10 })
+  b.t0 = Date.now() - 8 * 60_000        // 8 minutes in
+  assert.ok(b.timeLeftMs() <= 2 * 60_000 + 1000)
+  b.exclude(5 * 60_000)                  // five of those were a deploy
+  assert.ok(b.timeLeftMs() >= 7 * 60_000 - 1000, 'the deploy minutes come back')
 })

@@ -31,12 +31,17 @@ test('a fenced block inside the log cannot break out of the details block', () =
   assert.equal(out.split('\n').filter((l) => l === '```').length, 2)
 })
 
-test('unknown and conflict never read as verified', () => {
-  for (const verdict of ['unknown', 'conflict']) {
-    const out = baseCheckNote([{ target: 'qa', verdict, why: 'because' }], 'main')
-    assert.match(out, /no PR opened/)
-    assert.doesNotMatch(out, /tests pass/)
-  }
+test('unknown never reads as verified and opens nothing', () => {
+  const out = baseCheckNote([{ target: 'qa', verdict: 'unknown', why: 'because' }], 'main')
+  assert.match(out, /no PR opened/)
+  assert.doesNotMatch(out, /tests pass/)
+})
+
+test('a conflict still gets its PR, flagged, naming the files', () => {
+  const out = baseCheckNote([{ target: 'qa', verdict: 'conflict', files: ['a.ts'], why: 'this branch does not merge cleanly into qa (conflicts in `a.ts`)' }], 'main')
+  assert.match(out, /PR opened, but it does not merge cleanly/)
+  assert.match(out, /a\.ts/)
+  assert.doesNotMatch(out, /tests pass/)
 })
 
 test('several bases each get their own line', () => {

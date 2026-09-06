@@ -56,6 +56,7 @@ export const S = Annotation.Root({
   ticketShots: last(),  // [{ file, name }]
   // Browser QA on the fixed app (nodes/browserqa.mjs): the after-pictures, the verdict, and why it
   // did not run when it did not. Never blocks publish; publish renders whatever is here.
+  deploy: last(),       // { status: deployed|skipped|failed, versionId, appsyncUrl, userPoolId, lambdas, seeded, minutes, reason }
   qa: last(),           // { status, summary, shots[{file,caption}], video, gif, trace, unresolved[], reason }
   replans: Annotation({ reducer: (a, b) => (b ?? 0), default: () => 0 }),
 

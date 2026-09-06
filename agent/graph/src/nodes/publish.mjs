@@ -75,10 +75,15 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
       : qa.status === 'bugs_unresolved' ? '**the reported symptom is NOT confirmed fixed** — read the summary'
       : qa.status === 'incomplete' ? 'the session ran out of time before finishing — partial'
       : qa.status
-    lines.push(`**Verified on the fixed app** (${qa.appUrl || 'local dev server'}, signed in as ${qa.user || 'the QA user'}) — ${verdict}.`, '')
+    if (qa.mode === 'observe' || qa.status === 'observed') {
+      lines.push(`**The screens this change affects, on qa today** (${qa.appUrl || 'local dev server'}, signed in as ${qa.user || 'the QA user'}). The fix is in the backend, which the local app does not run — these show the UI as it stands **before** this change is deployed, so a reviewer sees exactly where to look once it is. They are context, not proof.`, '')
+    } else {
+      const be = qa.backend ? ` · backend: private version \`${qa.backend.versionId}\` of this branch, ${qa.backend.lambdas} Lambda(s) deployed for this run` : ''
+      lines.push(`**Verified on the fixed app** (${qa.appUrl || 'local dev server'}, signed in as ${qa.user || 'the QA user'}${be}) — ${verdict}.`, '')
+    }
     if (qa.summary) lines.push(`> ${String(qa.summary).replace(/\n+/g, ' ')}`, '')
     for (const shot of qa.shots) lines.push(`**${shot.caption || shot.file}**`, '', `![${shot.caption || shot.file}](${href(shot.file)})`, '')
-    if (qa.gif) lines.push(`![walkthrough on the fixed app](${href(qa.gif)})`, '')
+    if (qa.gif) lines.push(`![${qa.mode === 'observe' ? 'walkthrough of the affected screens on qa' : 'walkthrough on the fixed app'}](${href(qa.gif)})`, '')
     const links = [qa.video && `[video (webm)](${href(qa.video)})`, qa.trace && `[Playwright trace](${href(qa.trace)})`].filter(Boolean)
     if (links.length) lines.push(`Full recording: ${links.join(' · ')}`, '')
     if (qa.unresolved?.length) {
@@ -90,6 +95,9 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
     lines.push(`> **Browser QA ran but captured no screenshots** (${qa.status}). ${qa.summary || ''}`, '')
   } else if (qa?.reason) {
     lines.push(`> **Browser QA did not run:** ${qa.reason}`, '')
+  }
+  if (s.deploy?.status === 'failed') {
+    lines.push(`> **Backend deploy failed at ${s.deploy.step}:** ${s.deploy.reason}. Any screens above show the UI as it stands; the fix itself was not exercised in a browser.`, '')
   }
 
   if (r?.status === 'red' && e?.reproGreen) {
@@ -309,7 +317,7 @@ export function baseCheckNote(checks = [], primary = 'main') {
       `<details><summary>what fails on the merge with ${c.target}</summary>`,
       '', '```', headline(c.out), '```', '</details>',
     ].join('\n')
-    if (c.verdict === 'conflict') return `- \`${c.target}\` — **no PR opened.** ${c.why}.`
+    if (c.verdict === 'conflict') return `- \`${c.target}\` — **PR opened, but it does not merge cleanly.** ${c.why}. Resolve the conflict on this branch (or a \`${c.target}\`-based copy) before merging there; the product change is verified for \`${primary}\`.`
     if (c.verdict !== 'red') return `- \`${c.target}\` — **no PR opened**, and not checked: ${c.why}.`
     const log = headline(c.out)
     return [
@@ -335,8 +343,9 @@ async function verifyOnMergeWith({ repo, target, testArgv, timeoutMs, ownTest, o
     const { stdout } = await git(['merge', '--no-commit', '--no-ff', 'FETCH_HEAD'])
     merged = !/Already up to date/i.test(stdout)
   } catch (e) {
+    const files = (await git(['diff', '--name-only', '--diff-filter=U']).catch(() => ({ stdout: '' }))).stdout.split('\n').map((x) => x.trim()).filter(Boolean)
     await git(['merge', '--abort']).catch(() => {})
-    return { verdict: 'conflict', why: `this branch does not merge cleanly into ${target}` }
+    return { verdict: 'conflict', files, why: `this branch does not merge cleanly into ${target}${files.length ? ` (conflicts in ${files.map((f) => `\`${f}\``).join(', ')})` : ''}` }
   }
 
   try {
@@ -406,9 +415,13 @@ export function publishNode({ budget, dryRun = false }) {
     // The writer sees the CODE, not the plan. The plan is a forecast written before any file was
     // read; the diff is what happened. Product hunks first, tests after, capped so a Haiku call stays
     // cents — the reviewer reads the full diff on GitHub anyway.
-    const { stdout: fullDiff } = await git(s.repo, ['diff', 'HEAD', '--', ...(s.changed || [])]).catch(() => ({ stdout: '' }))
-    const isTest = (h) => /\.(test|spec)\.[cm]?[jt]sx?\b|__tests__\//.test(h.split('\n')[0])
-    const hunks = fullDiff.split(/^(?=diff --git )/m).filter(Boolean)
+    // patch.diff (written by the patch node) carries NEW files too; `git diff HEAD` does not see
+    // untracked files, which is how a PR said "No new test files" over three new test files.
+    let fullDiff = ''
+    try { fullDiff = fs.readFileSync(path.join(process.env.PAG_RUN_DIR || '', 'patch.diff'), 'utf8') } catch { /* fall back */ }
+    if (!fullDiff.trim()) fullDiff = (await git(s.repo, ['diff', 'HEAD', '--', ...(s.changed || [])]).catch(() => ({ stdout: '' }))).stdout
+    const isTest = (h) => /\.(test|spec)\.[cm]?[jt]sx?\b|__tests__\/|\/tests\//.test(h.split('\n')[0])
+    const hunks = fullDiff.split(/^(?=diff --git |\n?--- NEW FILE: )/m).filter((h) => h.trim())
     const codeDiff = [...hunks.filter((h) => !isTest(h)), ...hunks.filter(isTest)].join('').slice(0, 14_000)
     const { data, inTok, outTok } = await converseJson({
       model: tier.model,
@@ -680,7 +693,11 @@ export function publishNode({ budget, dryRun = false }) {
       baseChecks.push({ target: t, ...r })
       console.error(`base ${t}: ${r.verdict}${r.why ? ` — ${r.why}` : ''}`)
     }
-    const openInto = baseChecks.filter((c) => c.verdict === 'green' || c.verdict === 'green-agent-test').map((c) => c.target)
+    // A conflict still gets its PR: the operator's rule is one branch, two PRs, every time. GitHub
+    // shows the conflict on the PR itself, the body names the files, and a human resolves it there.
+    // Only a RED merge (the owning project's tests fail on the merge) stays closed — that is a
+    // verdict on the change, not on git.
+    const openInto = baseChecks.filter((c) => ['green', 'green-agent-test', 'conflict'].includes(c.verdict)).map((c) => c.target)
     const baseNote = baseCheckNote(baseChecks, s.prTargetBranch)
 
     // ---- draft PR, created or updated ---------------------------------------------------------
@@ -708,13 +725,21 @@ export function publishNode({ budget, dryRun = false }) {
     // agent does not open a PR it cannot stand behind.
     const extraPrs = []
     for (const t of openInto) {
+      const check = baseChecks.find((c) => c.target === t)
+      const conflictNote = check?.verdict === 'conflict' ? [
+        '',
+        `> ⚠️ **Does not merge cleanly into \`${t}\`**${check.files?.length ? ` — conflicts in ${check.files.map((f) => `\`${f}\``).join(', ')}` : ''}.`,
+        `> The change is verified against \`${s.prTargetBranch}\`; resolve the conflict here before merging. Not auto-resolved on purpose.`,
+      ] : []
       const note = [
         `> **Lower-environment copy.** Same branch as ${prUrl}, targeting \`${t}\` so this can be`,
         `> deployed and tested before it lands on \`${s.prTargetBranch}\`. Reviewing it twice is not`,
         '> necessary — read it there, test it here.',
         '>',
-        `> The owning project's tests were re-run on the merge of this branch with \`${t}\` before this`,
-        `> PR was opened — this is not the \`${s.prTargetBranch}\` result restated.`,
+        ...(check?.verdict === 'conflict' ? conflictNote : [
+          `> The owning project's tests were re-run on the merge of this branch with \`${t}\` before this`,
+          `> PR was opened — this is not the \`${s.prTargetBranch}\` result restated.`,
+        ]),
         '',
       ].join('\n')
       const r = await createOrUpdatePr({

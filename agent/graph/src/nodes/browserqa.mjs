@@ -42,10 +42,17 @@ function appRoutes(profile) {
   } catch { return [] }
 }
 
-const PROMPT = (s, { appUrl, outDir, resultFile, ticketShots, routes, minutes }) => `You are doing BROWSER QA for ${s.issueKey}: confirm, in a real browser, that the bug the ticket reports
+const PROMPT = (s, { appUrl, outDir, resultFile, ticketShots, routes, minutes, mode = 'verify' }) => `${mode === 'observe' ? `You are doing BROWSER QA for ${s.issueKey} in OBSERVE mode. The fix is in the BACKEND (${(s.changed || []).filter((f) => !/test/.test(f)).slice(0, 3).join(', ')}),
+which the local app at ${appUrl} does NOT run — it calls the deployed qa backend, where this fix is not deployed.
+So you CANNOT see the fix, and you must not claim to. Your job: walk the ticket's steps on qa exactly as a
+reviewer would, and capture the screens this change affects as they are TODAY — the automation's configuration,
+the record the ticket names (or the closest one you can find), the field that should change, the Linked Records
+view. Caption each screenshot as what it shows today. That gives the reviewer the real UI next to the diff.
+\`status\` must be \`observed\`. You are NOT writing tests and you do NOT edit code.` : `You are doing BROWSER QA for ${s.issueKey}: confirm, in a real browser, that the bug the ticket reports
 is gone on the FIXED app, and capture screenshots that prove it. The fix is already applied and the local
-dev server at ${appUrl} is serving it (Vite HMR — the code you see running is the patched code). You are NOT
-writing tests and you do NOT edit code.
+dev server at ${appUrl} is serving it (Vite HMR — the code you see running is the patched code).${s.deploy?.status === 'deployed' ? `
+The BACKEND is a private deploy of this branch too (version ${s.deploy.versionId}), and the org you are signed into is the agent's own seeded QA org — it starts EMPTY apart from the admin, so create whatever collections, fields, records, automations or roles the ticket's steps need, then run the steps. Backend behaviour you trigger — automations, permissions, record writes — runs the fixed code.` : ''} You are NOT
+writing tests and you do NOT edit code.`}
 
 ## Your tools
 \`browser_navigate\`, \`browser_snapshot\`, \`browser_click\`, \`browser_type\`, \`browser_select_option\`,
@@ -92,19 +99,15 @@ this session at any moment; the file must be true at every moment:
   "unresolvedIssues": [ { "issue": "...", "impact": "...", "nextStep": "..." } ] }
 \`\`\`
 \`status\`: \`passed\` (bug confirmed gone, nothing else broken) · \`bugs_unresolved\` (the bug, or a regression,
-is still visible) · \`incomplete\` (you did not finish). Never leave a stale optimistic status.
+is still visible) · \`incomplete\` (you did not finish)${mode === 'observe' ? ' · `observed` (OBSERVE mode: screens captured as they are today, fix not deployed here — the only status allowed in this mode)' : ''}. Never leave a stale optimistic status.
 
-${process.env.PAG_QA_READONLY === '1' ? `## Read-only account — do not create or change anything
-The account you hold belongs to a colleague and is BORROWED. Do not create, invite, edit, configure, upload or
-delete anything — no roles, users, fields, records, settings, not even a draft. Only navigate, read and screenshot.
-If the ticket cannot be reproduced without data setup, say exactly what data would be needed in
-\`unresolvedIssues\` and finish as \`incomplete\`.` : `## Data setup — you are allowed to create what the ticket needs
+## Data setup — you are allowed to create what the ticket needs
 The account you hold is an admin. If the ticket is about a ROLE, a PERMISSION, a specific FIELD CONFIGURATION or
 a record that this account does not have: create it. Create a custom role with exactly the permissions the
 ticket names, create or invite a user with that role (any name; use a +tag on the QA email), configure the field
 as the ticket describes, create a record with the ticket's values. Then sign out and sign in AS THAT USER to
 reproduce — the bug may be invisible to an admin (ESI2-3406 is). Never delete anything, never change an existing
-user's role, never touch account or organisation settings beyond what the ticket needs.`}
+user's role, never touch account or organisation settings beyond what the ticket needs.
 
 ## Do this, in order
 1. Write the outcome file.
@@ -131,7 +134,13 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
     if (!UI_EVIDENCE) return skip('PAG_UI_EVIDENCE is not 1')
     if (!s.gate?.ok) return skip('the gate is not green')
     const profile = loadProfile(s.repo)
-    if (!(s.changed || []).some((f) => profile.isUi?.(f))) return skip('the fix is not in the web app — the local dev server would not run it')
+    // verify: the fix is in the web app, the dev server runs it, the screenshots show it working.
+    // observe: the fix is in the backend, which this app does NOT run (it calls the deployed qa
+    // backend) — so the session walks the ticket's screens as they stand today and captures the exact
+    // UI the change affects, labelled as such. Honest context, never presented as proof.
+    const deployed = s.deploy?.status === 'deployed'
+    const mode = ((s.changed || []).some((f) => profile.isUi?.(f)) || deployed) ? 'verify' : s.spec?.symptom?.screen ? 'observe' : null
+    if (!mode) return skip('the fix is not in the web app and the ticket names no screen to look at')
     if (!HAS_LOGIN()) return skip('PAG_APP_EMAIL / PAG_APP_PASSWORD are not set to a real account')
     if (!browsermcp.mcpEnabled()) return skip('PAG_WITNESS_MCP=0')
 
@@ -155,12 +164,12 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
     const ticketShots = (s.ticketShots || []).map((t) => path.join(runDir, 'evidence', t.file))
     const tier = tierFor('repro')
     const minutes = Math.floor(timeMs / 60_000)
-    onProgress(`browser QA: ${minutes} min, signed in as ${process.env.PAG_APP_EMAIL}, ${ticketShots.length} ticket screenshot(s) to read`)
+    onProgress(`browser QA (${mode}${mode === 'observe' ? ': backend fix, not deployed here — capturing the ticket\'s screens as they are on qa' : ''}): ${minutes} min, signed in as ${process.env.PAG_APP_EMAIL}, ${ticketShots.length} ticket screenshot(s) to read`)
 
     const r = await runClaude({
       cwd: s.repo, model: tier.model, budgetUsd: Math.min(QA_BUDGET_USD, budget.availableFor('repro')), timeoutMs: timeMs,
       onProgress, mcpConfig,
-      prompt: PROMPT(s, { appUrl: app.url, outDir, resultFile, ticketShots, routes: appRoutes(profile), minutes }),
+      prompt: PROMPT(s, { appUrl: app.url, outDir, resultFile, ticketShots, routes: appRoutes(profile), minutes, mode }),
     })
     budget.charge('qa', r.cost, { model: tier.model, subtype: r.subtype, exit: r.code })
 
@@ -176,12 +185,13 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
       return { file: base, caption: captions.get(base) || captions.get(original) || null }
     }).filter((x) => x.caption || !captions.size) // probe shots the model did not caption stay out once it captioned any
     saveEvidence('qa-result.json', JSON.stringify(result, null, 2))
-    const status = result.status || (r.timedOut ? 'incomplete' : shots.length ? 'incomplete' : 'no_output')
+    let status = result.status || (r.timedOut ? 'incomplete' : shots.length ? 'incomplete' : 'no_output')
+    if (mode === 'observe' && shots.length) status = 'observed' // never 'passed': nothing here can prove the fix
     onProgress(`browser QA: ${status} — ${shots.length} screenshot(s), video ${got.video ? 'yes' : 'no'}, trace ${got.trace ? 'yes' : 'no'}`)
     return {
       qa: {
         status, summary: result.summary || '', unresolved: result.unresolvedIssues || [],
-        shots, video: got.video && path.basename(got.video), gif: got.gif && path.basename(got.gif), trace: got.trace && path.basename(got.trace),
+        mode, backend: deployed ? s.deploy : null, shots, video: got.video && path.basename(got.video), gif: got.gif && path.basename(got.gif), trace: got.trace && path.basename(got.trace),
         appUrl: app.url, user: process.env.PAG_APP_EMAIL, cost: r.cost,
       },
     }

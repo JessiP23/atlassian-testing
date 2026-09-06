@@ -122,6 +122,42 @@ if the symptom is produced somewhere the plan did not allow; or \`REPRO: none <o
 if the symptom cannot be made to fail in a test at this level (say why: needs a browser, needs a live
 service, no concrete input in the ticket).`
 
+/**
+ * Why is this red? 'assertion' — an expect() ran and failed (or the code threw the very error the
+ * ticket quotes); 'crash' — a TypeError/ReferenceError with no assertion in sight, i.e. the test's
+ * own setup fell over inside production code; 'other' — anything else (left to the callers' checks).
+ */
+export function redFor(out, spec) {
+  const text = String(out || '')
+  const assertion = /expect\(|Expected[:\s]|Received[:\s]|AssertionError|toBe|toEqual|toHaveBeenCalled/.test(text)
+  const quoted = spec?.symptom?.errorText && text.includes(String(spec.symptom.errorText).slice(0, 60))
+  if (assertion || quoted) return 'assertion'
+  if (/TypeError|ReferenceError|Cannot read propert/.test(text)) return 'crash'
+  return 'other'
+}
+
+/** Red repro specs from earlier runs on this ticket, newest first: [{ run, file, src }]. */
+export function priorRedSpecs(issueKey) {
+  const runDir = process.env.PAG_RUN_DIR
+  if (!runDir) return []
+  const parent = path.dirname(path.resolve(runDir))
+  let runs = []
+  try { runs = fs.readdirSync(parent).filter((d) => d !== path.basename(runDir)).sort().reverse() } catch { return [] }
+  const out = []
+  for (const run of runs) {
+    try {
+      const dir = path.join(parent, run)
+      const rec = fs.readdirSync(dir).find((f) => /^\d+-reproduce\.json$/.test(f))
+      if (!rec) continue
+      const repro = JSON.parse(fs.readFileSync(path.join(dir, rec), 'utf8'))?.output?.repro
+      if (repro?.status !== 'red' || !repro.file) continue
+      const src = fs.readFileSync(path.join(dir, 'evidence', 'repro.test.ts'), 'utf8')
+      out.push({ run, file: repro.file, src })
+    } catch { /* an incomplete run dir — skip */ }
+  }
+  return out
+}
+
 export function reproduceNode({ budget, onProgress = () => {} }) {
   return async (s) => {
     // A red repro survives a re-plan: it pins the symptom, not the fix location.
@@ -139,6 +175,27 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
       return { repro: { status: 'none', rung, reason: specFile
         ? `this repo has no unit test runner (profile ${profile.name}) — ${rung === 'component' ? 'a component test needs one' : 'a non-UI symptom cannot be proven here'}`
         : 'no source target to write a test against' } }
+    }
+
+    // ---- an earlier run on this ticket may already hold the right test ------------------------
+    //
+    // ESI2-3194: run 1 wrote a red test that pinned the exact mechanism (an automation-issued write
+    // published with the upstream changeType) and was then refused for an unrelated reason; run 2
+    // started from zero, ran out of money mid-trace, and froze a test that was red because of a
+    // TypeError in its own mocks. Two runs, same base, opposite quality — pure variance. A red spec
+    // that still fails on this tree is a fact about the code, not about the run that wrote it, so
+    // reuse it: newest first, re-run here, and take the first that is red for an assertion reason.
+    for (const prior of priorRedSpecs(s.issueKey)) {
+      if (prior.file !== specFile && !fs.existsSync(path.dirname(path.join(s.repo, prior.file)))) continue
+      const dest = prior.file
+      fs.writeFileSync(path.join(s.repo, dest), prior.src)
+      const red = await runSpec(s.repo, dest)
+      const verdict = red.ok ? 'green on this tree' : /\?\.\(/.test(prior.src) ? 'a probe for a missing symbol' : redFor(red.out, s.spec) !== 'assertion' ? `red for the wrong reason (${redFor(red.out, s.spec)})` : null
+      if (verdict) { fs.rmSync(path.join(s.repo, dest), { force: true }); onProgress(`earlier repro from ${prior.run} is ${verdict} — not reusing it`); continue }
+      const sha = sha256(s.repo, dest)
+      saveEvidence('repro.test.ts', prior.src); saveEvidence('repro-red.log', red.out)
+      onProgress(`repro RED on ${String(s.baseSha).slice(0, 7)}: ${dest} — reused from run ${prior.run} ($0)`)
+      return { repro: { status: 'red', file: dest, sha, rung, cmd: red.cmd, redExcerpt: excerpt(red.out), attempts: 0, reusedFrom: prior.run } }
     }
 
     const tier = tierFor('repro')
@@ -230,6 +287,22 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
       // `?.(` is an optional CALL — the only reason to write one in a test is that the callee may not
       // exist. Plain `?.` property access on a result is normal and is not flagged.
       const specSrc = fs.readFileSync(path.join(s.repo, specFile), 'utf8')
+      if (redFor(red.out, s.spec) === 'crash') {
+        // ESI2-3194 run 2: red with `TypeError: Cannot read properties of undefined (reading
+        // 'viewOnlyFields')` at update-collection-record.ts:666 — a mock the test did not provide,
+        // thrown before the code under test was reached. It went red → green through the whole
+        // run and the "fix" was optional chaining around the crash. No assertion ever ran.
+        previous = `Attempt ${attempt}: the test went red because the production code CRASHED on a missing mock `
+          + `(${(red.out.match(/(TypeError|ReferenceError)[^\n]{0,140}/) || [])[0] || 'TypeError'}), before any assertion ran. `
+          + 'That is a gap in the test setup, not the bug. Mock what that line needs (look at how the nearest '
+          + 'existing spec in this project sets it up) so the code runs through to your expect(), and the red is an assertion failure.'
+        onProgress('repro is red only because the harness crashed in production code (missing mock) — not a reproduction')
+        if (attempt === attempts) {
+          fs.rmSync(path.join(s.repo, specFile), { force: true })
+          return { repro: { status: 'none', reason: 'the only red the test produced was a crash on a missing mock, before any assertion ran — that is not a reproduction of the symptom', rung } }
+        }
+        continue
+      }
       if (/\?\.\(/.test(specSrc) || /is not a function|is not defined|has no exported member/.test(red.out)) {
         previous = `Attempt ${attempt}: the test went red because it calls something that does not exist on this commit `
           + '(an optional call, a cast, or a missing export), not because the code produced the wrong VALUE for the '

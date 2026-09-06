@@ -106,9 +106,12 @@ export function classify(changed, allow, plannedTests = []) {
   for (const p of changed) {
     if (isDenied(p)) { denied.push(p); continue }
     if (allowSet.has(p)) { inScope.push(p); continue }
-    // A test beside an allowed source is in scope even if the plan spelled its path differently
-    // (`__tests__/x.test.ts` vs `x.test.ts` is a coin flip the planner should not have to win).
-    if (isTestFor(p, allow)) { inScope.push(p); continue }
+    // ANY test file is in scope. Tests do not ship; the gate runs them; a fix that extends an
+    // existing suite two directories away (ESI2-3194: `src/tests/update-fields-cascade-guards.test.ts`
+    // for `process-actions/update-fields.ts`) is exactly what a careful engineer does, and refusing
+    // a correct, red->green patch for it threw away $5 of work. Production drift is what
+    // `outOfScope` is for.
+    if (isTestFile(p)) { inScope.push(p); continue }
     if (isGenerated(p)) { generated.push(p); continue }
     outOfScope.push(p)
   }

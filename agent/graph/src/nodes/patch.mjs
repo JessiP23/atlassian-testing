@@ -93,6 +93,12 @@ Its current failure:
 ${s.repro.redExcerpt || ''}
 \`\`\`
 ` : ''}
+${ctxPrior(s)}
+## Order of work — the wall clock kills this session, unfinished work is carried forward as-is
+1. The product fix, in the allowed files. 2. Make the reproducing test pass. 3. ONE focused test
+of your own if the plan lists one. 4. \`npx eslint\` on the files you touched. Then stop. Do not
+write more test files than the plan lists — a run died at the deadline writing its third.
+
 ## Standards — the gate enforces lint and types; you are responsible for these
 - Match the neighbouring files in this package: naming, error handling, how they log, how they test.
 - No new dependencies. No \`any\`, no \`@ts-ignore\`, no \`console.log\`, no commented-out code.
@@ -113,6 +119,41 @@ Read a specific file when the pack points you at one; do not sweep.
 Write the code and the tests. Run only the tests you just wrote, to confirm they pass. Do NOT run
 the repo-wide test suite (the workflow's verify step owns that, scoped), do not commit, and do not
 create or switch branches — the workflow owns git. Leave everything uncommitted in the working tree.`
+
+/**
+ * The newest earlier run on this ticket that left a diff: its product hunks and what became of it.
+ * ESI2-3194 run 1 found the exact root cause and was refused on a scope technicality; run 2 began
+ * from nothing and shipped logging. A diff is evidence about the code — judge it, do not redo it.
+ */
+function ctxPrior(s) {
+  const runDir = process.env.PAG_RUN_DIR
+  if (!runDir) return ''
+  const parent = path.dirname(path.resolve(runDir))
+  let runs = []
+  try { runs = fs.readdirSync(parent).filter((d) => d !== path.basename(runDir)).sort().reverse() } catch { return '' }
+  for (const run of runs) {
+    try {
+      const dir = path.join(parent, run)
+      const diff = fs.readFileSync(path.join(dir, 'patch.diff'), 'utf8')
+      const hunks = diff.split(/^(?=diff --git |\n--- NEW FILE: )/m).filter((h) => h.trim() && !/\.(test|spec)\.[tj]sx?\b|__tests__\/|\/tests\//.test(h.split('\n')[0]))
+      if (!hunks.length) continue
+      const files = fs.readdirSync(dir)
+      const refuse = files.find((f) => /-refuse\.json$/.test(f))
+      const outcome = refuse
+        ? (() => { const r = JSON.parse(fs.readFileSync(path.join(dir, refuse), 'utf8'))?.output?.refusal; return `refused for "${r?.reason}" (${String(r?.detail || '').slice(0, 160)})` })()
+        : files.some((f) => /-publish\.json$/.test(f)) ? 'published as a draft PR (a reviewer has not accepted it)' : 'stopped before publishing'
+      return `
+## An earlier run on this ticket left this diff — ${outcome}
+Judge it on its merits against the plan above. If its root cause is right, reapply it (adapted to
+the allowed files) rather than re-deriving it; if it is wrong, say why in your closing report.
+\`\`\`diff
+${hunks.join('').slice(0, 10_000)}
+\`\`\`
+`
+    } catch { /* incomplete run dir */ }
+  }
+  return ''
+}
 
 export function patchNode({ budget, onProgress = () => {} }) {
   return async (s) => {

@@ -43,8 +43,8 @@ reopened: a NARROW test, and all three parts must hold:
 An open or draft PR is NOT a shipped fix. A root-cause analysis is NOT a shipped fix. A list of
 attempts with no merge is NOT a shipped fix. If any of the three is missing, reopened is false —
 say what you saw in riskNotes instead. When all three hold, set reopened true, name the shipped fix
-in priorFix, and set confidence "low": a re-open needs the engineer who shipped it, not a second
-independent guess.
+in priorFix, and put in riskNotes what that fix assumed and what the customer's later report says
+differently — that gap is where the remaining bug lives. Do not lower confidence for a re-open.
 
 Return JSON:
 {"summary":str,"acceptanceCriteria":[str],"constraints":[str],"nonGoals":[str],
@@ -113,22 +113,10 @@ export function intakeNode({ budget }) {
     if (images.length) console.error(`      read ${images.length} screenshot(s) from the ticket`)
     if (data.symptom?.screen) console.error(`      symptom: ${data.symptom.screen}${data.symptom.errorText ? ` — "${data.symptom.errorText}"` : ''} [${data.symptom.layer || 'unknown'}]`)
 
-    // A re-open is the one shape where a fresh start is worse than no start: the first fix's author
-    // holds the context (ESI2-3194: chaining + loop guard shipped under ESI2-3156, QA confirmed
-    // twice, customer still failing). Hand it back with the prior fix named.
-    // A deliberate override for when a human has decided to point the agent at a re-open anyway.
-    if (data.reopened && process.env.PAG_ALLOW_REOPEN === '1') {
-      console.error(`      re-open detected${data.priorFix ? ` (${data.priorFix})` : ''} — continuing because PAG_ALLOW_REOPEN=1`)
-    } else if (data.reopened) {
-      return {
-        ticket, spec: data, ticketShots,
-        refusal: {
-          at: 'intake', reason: 'ticket_reopened',
-          detail: `A fix for this was already shipped${data.priorFix ? ` (${data.priorFix})` : ''} and the customer reports it still failing. `
-            + 'This needs the engineer who shipped it, not a second independent attempt.',
-        },
-      }
-    }
+    // A re-open is CONTEXT, not a stop. A human pointed the agent at this ticket on purpose; the
+    // prior fix and the "still failing" report are the most valuable facts in the thread, and the
+    // plan gets them (see plan.mjs) so the work is "what did the shipped fix miss", never a redo.
+    if (data.reopened) console.error(`      re-open: ${data.priorFix || 'a prior fix'} shipped and the customer still reports it — planning around what it missed`)
 
     // Low confidence is a WARNING unless the ticket really gives nothing to reproduce.
     //

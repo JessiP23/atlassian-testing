@@ -39,6 +39,7 @@ import { repairNode } from './nodes/repair.mjs'
 import { publishNode } from './nodes/publish.mjs'
 import { approveNode, REQUIRE_APPROVAL } from './nodes/approve.mjs'
 import { browserQaNode } from './nodes/browserqa.mjs'
+import { deployNode } from './nodes/deploy.mjs'
 import { addComment, AGENT_MARK } from './lib/jira.mjs'
 import { traced } from './lib/trace.mjs'
 
@@ -110,7 +111,7 @@ export function afterVerifyWith(budget) {
     // Green gate: verify the fix in the running app before anyone approves it. The node skips itself
     // in three seconds when the ticket is not UI, when the app cannot start, or when nothing is
     // configured — so backend tickets pay nothing for it and the edge stays unconditional.
-    if (s.gate?.ok) return 'browserqa'
+    if (s.gate?.ok) return 'deploy'
     if (onlyFrozenFileFails(s)) return SALVAGE && s.changed?.length ? 'handover' : 'refuse'
     const attemptsLeft = (s.attempts ?? 0) < MAX_REPAIR_ATTEMPTS
     const clock = budget.timeFor('repair') >= 45_000
@@ -199,6 +200,7 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     .addNode('patch', N('patch', patchNode({ budget, onProgress })))
     .addNode('verify', N('verify', verifyNode({ budget, onProgress })))
     .addNode('repair', N('repair', repairNode({ budget, onProgress })))
+    .addNode('deploy', N('deploy', deployNode({ budget, onProgress })))
     .addNode('browserqa', N('browserqa', browserQaNode({ budget, onProgress })))
     .addNode('handover', N('handover', handoverNode))
     .addNode('approve', N('approve', approveNode()))
@@ -211,7 +213,8 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     .addConditionalEdges('planning', orRefuse('reproduce'), ['reproduce', 'refuse'])
     .addConditionalEdges('reproduce', afterReproduce, ['patch', 'planning', 'refuse'])
     .addConditionalEdges('patch', afterPatch, ['verify', 'planning', 'refuse'])
-    .addConditionalEdges('verify', afterVerifyWith(budget), ['browserqa', 'repair', 'handover', 'refuse'])
+    .addConditionalEdges('verify', afterVerifyWith(budget), ['deploy', 'repair', 'handover', 'refuse'])
+    .addEdge('deploy', 'browserqa')
     .addEdge('browserqa', 'approve')
     .addConditionalEdges('approve', orRefuse('publish'), ['publish', 'refuse'])
     .addConditionalEdges('repair', afterRepair, ['verify', 'handover', 'refuse'])   // the bounded loop

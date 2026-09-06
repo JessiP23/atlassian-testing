@@ -34,7 +34,7 @@
 // Declared in execution order. `needMs` is the TYPICAL cost of that phase, not its worst case:
 // reserving worst cases for everything downstream starves the phase in hand for a run that will
 // not happen. Overruns are absorbed by the next phase's own min().
-export const PHASE_ORDER = ['intake', 'locate', 'planning', 'reproduce', 'patch', 'verify', 'repair', 'browserqa', 'package', 'publish']
+export const PHASE_ORDER = ['intake', 'locate', 'planning', 'reproduce', 'patch', 'verify', 'repair', 'deploy', 'browserqa', 'package', 'publish']
 
 export const PHASES = {
   intake:    { ceilMs:  45_000, needMs:  20_000 },
@@ -48,6 +48,7 @@ export const PHASES = {
   // it is where a UI ticket's evidence comes from, so its ceiling is generous: Cody's step has 75 min;
   // 20 is the floor at which a model with eyes can sign in, set up a role, walk the ticket and shoot
   // each state. Backend tickets skip it entirely and never pay for it.
+  deploy:    { ceilMs: 0, needMs: 0 },   // a build, on its own clock — the node excludes its time from the deadline
   browserqa: { ceilMs: Number(process.env.PAG_QA_MINUTES || 20) * 60_000, needMs: 0 },
   package:   { ceilMs:  60_000, needMs:  20_000 },
   // needMs is what EVERY phase upstream must leave behind, and publish is the deliverable: a
@@ -79,9 +80,13 @@ export class Budget {
     this.ledger = []
     this.phases = []          // { node, ms } — what each phase actually took, for the PR footer
     this.phaseT0 = {}         // when each phase started, so a ceiling can be a TOTAL not a per-try
+    this.excludedMs = 0       // build time (a backend deploy) the deadline does not count
   }
 
-  elapsedMs() { return Date.now() - this.t0 }
+  elapsedMs() { return Date.now() - this.t0 - this.excludedMs }
+
+  /** Take `ms` off the clock: a deploy is a build, not model time. */
+  exclude(ms) { this.excludedMs += Math.max(0, ms) }
 
   /** Wall-clock left before the run must stop. */
   timeLeftMs() { return Math.max(0, this.maxMinutes * 60_000 - this.elapsedMs()) }

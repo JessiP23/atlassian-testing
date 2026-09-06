@@ -31,6 +31,11 @@ export const mcpEnabled = () => process.env.PAG_WITNESS_MCP !== '0'
  * Cached for the process: one login per run, not one per attempt.
  */
 let statePromise = null
+/** Forget the baked session: the app now points at another backend/pool. */
+export function resetLoginState() {
+  statePromise = null
+  fs.rmSync(path.join(GRAPH_DIR, '.pag', 'login-state.json'), { force: true })
+}
 export function loginState({ appUrl, onProgress = () => {} }) {
   if (statePromise) return statePromise
   const out = path.join(GRAPH_DIR, '.pag', 'login-state.json')

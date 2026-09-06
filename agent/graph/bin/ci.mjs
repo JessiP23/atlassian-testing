@@ -185,7 +185,8 @@ console.log(`  base ${baseBranch}@${baseSha.slice(0, 7)}  ->  PR into ${prTarget
 console.log(`  cap $${budget.capUsd} (reserve $${budget.reserveUsd}) · hard deadline ${budget.maxMinutes} min`)
 console.log(`  clock: repro ${(budget.timeFor('reproduce') / 1000).toFixed(0)}s · patch ${(budget.timeFor('patch') / 1000).toFixed(0)}s · verify ${(budget.timeFor('verify') / 1000).toFixed(0)}s, and publish is always reserved`)
 console.log(`  models: fast=${TIERS.fast.model}  heavy=${TIERS.heavy.model}`)
-console.log(`  browser QA: ${process.env.PAG_UI_EVIDENCE !== '1' ? 'off (PAG_UI_EVIDENCE)' : /[<>]/.test(process.env.PAG_APP_PASSWORD || '') || !process.env.PAG_APP_PASSWORD ? 'off — no real PAG_APP_EMAIL/PASSWORD' : `on, after the gate, up to ${process.env.PAG_QA_MINUTES || 20} min, as ${process.env.PAG_APP_EMAIL}${process.env.PAG_QA_READONLY === '1' ? ' (read-only: borrowed account, no data setup)' : ''}`}`)
+console.log(`  backend deploy: ${process.env.PAG_UI_EVIDENCE === '1' ? 'on — a backend fix is deployed to a private per-ticket version before QA (first time per ticket ~35 min, then Lambdas only)' : 'off (PAG_UI_EVIDENCE)'}`)
+console.log(`  browser QA: ${process.env.PAG_UI_EVIDENCE !== '1' ? 'off (PAG_UI_EVIDENCE)' : /[<>]/.test(process.env.PAG_APP_PASSWORD || '') || !process.env.PAG_APP_PASSWORD ? 'off — no real PAG_APP_EMAIL/PASSWORD' : `on, after the gate, up to ${process.env.PAG_QA_MINUTES || 20} min, as ${process.env.PAG_APP_EMAIL}`}`)
 console.log('')
 
 const onProgress = (line) => {

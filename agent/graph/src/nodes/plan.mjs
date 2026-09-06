@@ -70,6 +70,11 @@ export function planNode({ budget, onProgress = () => {} }) {
           + ' Every file in impactedFiles must be on the code path that produces THAT screen for THOSE values.'
           + ' If none of the candidates is, set needsEscalation and say which layer the fix must live in.'
         : '',
+      s.spec.reopened
+        ? `RE-OPEN: a fix already shipped (${s.spec.priorFix || 'see the ticket comments'}) and the customer still reports the failure.`
+          + ' Do NOT redo that fix. Find the path it did not cover — the customer\'s actual trigger source, data shape or'
+          + ' configuration — and the impactedFiles must be on THAT path. Say in riskNotes what the prior fix assumed.'
+        : '',
       `ACCEPTANCE CRITERIA:\n${(s.spec.acceptanceCriteria || []).map((a, i) => `  ${i + 1}. ${a}`).join('\n')}`,
       `NON-GOALS:\n${(s.spec.nonGoals || []).map((a) => `  - ${a}`).join('\n')}`,
       `BUDGET: at most ${PLAN_FILE_TARGET} production files in impactedFiles (hard cap ${DIFF_LIMITS.maxFiles}),`,
