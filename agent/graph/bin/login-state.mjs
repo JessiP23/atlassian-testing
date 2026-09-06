@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { chromium } from 'playwright'
-import { credentials, doLogin } from '../witness/login-flow.mjs'
+import { credentials, doLogin, signedIn } from '../witness/login-flow.mjs'
 import { ensureApp, stopApp } from '../src/lib/app.mjs'
 
 const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : d }
@@ -42,7 +42,16 @@ const page = await context.newPage()
 try {
   await doLogin(page, creds)
   fs.mkdirSync(path.dirname(out), { recursive: true })
-  await context.storageState({ path: out })
+  const state = await context.storageState()
+  // Leaving /login is not a session. Refuse to write a state with no token in it — an empty state
+  // is worse than none, because the QA node then trusts it and the browser opens on the login page.
+  if (!signedIn(state)) {
+    const shot = out.replace(/\.json$/, '-failed.png')
+    await page.screenshot({ path: shot, fullPage: true }).catch(() => {})
+    fs.rmSync(out, { force: true })
+    throw new Error(`landed on ${page.url()} with no session cookie or token — wrong password, wrong Cognito pool for this backend, or the form changed (see ${shot})`)
+  }
+  fs.writeFileSync(out, JSON.stringify(state, null, 2), { mode: 0o600 })
   console.log(`signed in as ${creds.email} — state written to ${out}`)
 } catch (e) {
   console.error(`could not sign in at ${url}: ${String(e.message).split('\n')[0]}`)
