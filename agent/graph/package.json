@@ -19,6 +19,7 @@
     "dry": "node bin/ci.mjs --repo ${PAG_WORKTREE:-$HOME/pioneer-agent} --base ${PAG_BASE:-main} --dry-run",
     "live": "node bin/ci.mjs --repo ${PAG_WORKTREE:-$HOME/pioneer-agent} --base ${PAG_BASE:-main}",
     "jira": "node bin/jira-transition.mjs",
+    "backend": "node bin/backend.mjs",
     "login": "node bin/login-state.mjs"
   },
   "engines": {

@@ -39,8 +39,23 @@ if (!answering) {
 const browser = await chromium.launch()
 const context = await browser.newContext({ baseURL: url, viewport: { width: 1440, height: 900 } })
 const page = await context.newPage()
+// Print Cognito's own answer. The app swallows sign-in errors into store state and shows nothing, so
+// a wrong password, a user missing from THIS pool, or an MFA challenge all look like "nothing happened".
+page.on('response', async (r) => {
+  if (!/cognito-idp\./.test(r.url())) return
+  const target = (r.request().headers()['x-amz-target'] || '').replace('AWSCognitoIdentityProviderService.', '')
+  const clientId = /"ClientId":"([^"]+)"/.exec(r.request().postData() || '')?.[1] || '?'
+  if (r.status() >= 400) {
+    const body = await r.text().catch(() => '')
+    console.error(`  cognito ${target} (client ${clientId}) → ${r.status()} ${body.slice(0, 240)}`)
+  } else if (target === 'InitiateAuth' || target === 'RespondToAuthChallenge') {
+    const body = await r.text().catch(() => '')
+    const challenge = /"ChallengeName":"([^"]+)"/.exec(body)?.[1]
+    console.log(`  cognito ${target} (client ${clientId}) → ${r.status()}${challenge ? ' challenge ' + challenge : ' tokens issued'}`)
+  }
+})
 try {
-  await doLogin(page, creds)
+  await doLogin(page, creds, (l) => console.log(`  ${l}`))
   fs.mkdirSync(path.dirname(out), { recursive: true })
   const state = await context.storageState()
   // Leaving /login is not a session. Refuse to write a state with no token in it — an empty state
@@ -55,6 +70,23 @@ try {
   console.log(`signed in as ${creds.email} — state written to ${out}`)
 } catch (e) {
   console.error(`could not sign in at ${url}: ${String(e.message).split('\n')[0]}`)
+  // Show what the sign-in page was saying when we gave up: the error under the field, a
+  // new-password form, an MFA code box. Guessing between those from a timeout wasted two runs.
+  const shot = out.replace(/\.json$/, '-failed.png')
+  try {
+    fs.mkdirSync(path.dirname(out), { recursive: true })
+    await page.screenshot({ path: shot, fullPage: true })
+    const said = await page.evaluate(() => {
+      const t = (el) => (el?.innerText || '').trim()
+      const alerts = [...document.querySelectorAll('[role=alert], .error, [class*=error], [class*=Error]')].map(t).filter(Boolean)
+      const inputs = [...document.querySelectorAll('input')].map((i) => `${i.type}${i.name ? ':' + i.name : ''}${i.placeholder ? ' "' + i.placeholder + '"' : ''}`)
+      return { path: location.pathname, alerts: [...new Set(alerts)].slice(0, 5), inputs }
+    })
+    console.error(`  page: ${said.path}`)
+    if (said.alerts.length) console.error(`  page says: ${said.alerts.join(' | ')}`)
+    console.error(`  inputs on the page: ${said.inputs.join(', ') || 'none'}`)
+    console.error(`  screenshot: ${shot}`)
+  } catch {}
   process.exitCode = 1
 } finally {
   await browser.close()
