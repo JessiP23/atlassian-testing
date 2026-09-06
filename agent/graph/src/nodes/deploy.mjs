@@ -120,7 +120,7 @@ function applySesPreviewGuard(repo) {
 
 export function deployNode({ budget, onProgress = () => {} }) {
   return async (s) => {
-    const skip = (reason) => { onProgress(`deploy skipped: ${reason}`); return { deploy: { status: 'skipped', reason } } }
+    const skip = (reason) => { onProgress(`deploy skipped: ${reason}`); return { backend: { status: 'skipped', reason } } }
     if (!UI_EVIDENCE) return skip('PAG_UI_EVIDENCE is not 1 — a deploy only exists to feed browser QA')
     if (!s.gate?.ok) return skip('the gate is not green')
     const profile = loadProfile(s.repo)
@@ -147,7 +147,7 @@ export function deployNode({ budget, onProgress = () => {} }) {
       saveEvidence('deploy.log', log.join(''))
       onProgress(`deploy failed at ${step}: ${why}`)
       budget.exclude(Date.now() - t0)
-      return { deploy: { status: 'failed', step, reason: why, tail: String(tail).slice(-2500), versionId } }
+      return { backend: { status: 'failed', step, reason: why, tail: String(tail).slice(-2500), versionId } }
     }
 
     onProgress(`deploy: backend version ${versionId} for ${s.issueKey} (${backend.length} backend file(s) changed)`)
@@ -226,7 +226,7 @@ export function deployNode({ budget, onProgress = () => {} }) {
     budget.exclude(Date.now() - t0)
     onProgress(`deploy: backend ${versionId} is live — ${builtInfra ? 'stacks created, ' : ''}${deployedCount} Lambda(s) pushed${seeded ? ', QA org seeded' : ''} — ${minutes.toFixed(0)} min (not counted against the deadline)`)
     return {
-      deploy: {
+      backend: {
         status: 'deployed', versionId, builtInfra, lambdas: deployedCount, seeded, minutes: Number(minutes.toFixed(1)),
         appsyncUrl: vite.VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT, userPoolId: vite.VITE_APP_AWS_COGNITO_USER_POOL_ID,
         benign: failed.filter((p) => BENIGN.has(p)),

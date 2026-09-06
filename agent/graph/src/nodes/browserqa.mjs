@@ -50,8 +50,8 @@ the record the ticket names (or the closest one you can find), the field that sh
 view. Caption each screenshot as what it shows today. That gives the reviewer the real UI next to the diff.
 \`status\` must be \`observed\`. You are NOT writing tests and you do NOT edit code.` : `You are doing BROWSER QA for ${s.issueKey}: confirm, in a real browser, that the bug the ticket reports
 is gone on the FIXED app, and capture screenshots that prove it. The fix is already applied and the local
-dev server at ${appUrl} is serving it (Vite HMR — the code you see running is the patched code).${s.deploy?.status === 'deployed' ? `
-The BACKEND is a private deploy of this branch too (version ${s.deploy.versionId}), and the org you are signed into is the agent's own seeded QA org — it starts EMPTY apart from the admin, so create whatever collections, fields, records, automations or roles the ticket's steps need, then run the steps. Backend behaviour you trigger — automations, permissions, record writes — runs the fixed code.` : ''} You are NOT
+dev server at ${appUrl} is serving it (Vite HMR — the code you see running is the patched code).${s.backend?.status === 'deployed' ? `
+The BACKEND is a private deploy of this branch too (version ${s.backend.versionId}), and the org you are signed into is the agent's own seeded QA org — it starts EMPTY apart from the admin, so create whatever collections, fields, records, automations or roles the ticket's steps need, then run the steps. Backend behaviour you trigger — automations, permissions, record writes — runs the fixed code.` : ''} You are NOT
 writing tests and you do NOT edit code.`}
 
 ## Your tools
@@ -138,7 +138,7 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
     // observe: the fix is in the backend, which this app does NOT run (it calls the deployed qa
     // backend) — so the session walks the ticket's screens as they stand today and captures the exact
     // UI the change affects, labelled as such. Honest context, never presented as proof.
-    const deployed = s.deploy?.status === 'deployed'
+    const deployed = s.backend?.status === 'deployed'
     const mode = ((s.changed || []).some((f) => profile.isUi?.(f)) || deployed) ? 'verify' : s.spec?.symptom?.screen ? 'observe' : null
     if (!mode) return skip('the fix is not in the web app and the ticket names no screen to look at')
     if (!HAS_LOGIN()) return skip('PAG_APP_EMAIL / PAG_APP_PASSWORD are not set to a real account')
@@ -191,7 +191,7 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
     return {
       qa: {
         status, summary: result.summary || '', unresolved: result.unresolvedIssues || [],
-        mode, backend: deployed ? s.deploy : null, shots, video: got.video && path.basename(got.video), gif: got.gif && path.basename(got.gif), trace: got.trace && path.basename(got.trace),
+        mode, backend: deployed ? s.backend : null, shots, video: got.video && path.basename(got.video), gif: got.gif && path.basename(got.gif), trace: got.trace && path.basename(got.trace),
         appUrl: app.url, user: process.env.PAG_APP_EMAIL, cost: r.cost,
       },
     }

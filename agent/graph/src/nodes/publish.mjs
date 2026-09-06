@@ -96,8 +96,8 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
   } else if (qa?.reason) {
     lines.push(`> **Browser QA did not run:** ${qa.reason}`, '')
   }
-  if (s.deploy?.status === 'failed') {
-    lines.push(`> **Backend deploy failed at ${s.deploy.step}:** ${s.deploy.reason}. Any screens above show the UI as it stands; the fix itself was not exercised in a browser.`, '')
+  if (s.backend?.status === 'failed') {
+    lines.push(`> **Backend deploy failed at ${s.backend.step}:** ${s.backend.reason}. Any screens above show the UI as it stands; the fix itself was not exercised in a browser.`, '')
   }
 
   if (r?.status === 'red' && e?.reproGreen) {
