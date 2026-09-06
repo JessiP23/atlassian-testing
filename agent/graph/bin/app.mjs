@@ -36,6 +36,10 @@ if (!vite.VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT) die(`env.sh returned no AppSync
 console.error(`  backend ${AGENT_VERSION_ID}: ${vite.VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT}\n  pool    ${vite.VITE_APP_AWS_COGNITO_USER_POOL_ID}`)
 console.error(`  sign in at http://localhost:3000 as ${process.env.PAG_APP_EMAIL || '<PAG_APP_EMAIL>'} (password: PAG_APP_PASSWORD in graph/.env)\n`)
 
+// Anything still listening on :3000 (a server a previous run left behind) and the shared Vite cache
+// it may have corrupted both go first — see the note in src/lib/app.mjs.
+await exec('bash', ['-c', 'lsof -ti :3000 | xargs kill -9 2>/dev/null; true']).catch(() => {})
+fs.rmSync(path.join(repo, 'node_modules', '.vite'), { recursive: true, force: true })
 const child = spawn('npx', ['nx', 'run', 'clients-web-app:serve:development', '--port=3000', '--host=127.0.0.1'], {
   cwd: repo, stdio: 'inherit', env: { ...process.env, ...vite, VITE_APP_AWS_COGNITO_REGION: 'us-east-1', BROWSER: 'none' },
 })

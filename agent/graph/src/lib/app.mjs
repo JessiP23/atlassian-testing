@@ -6,6 +6,8 @@
 //
 // If PAG_APP_URL already answers, nothing is started (a preview URL, or a server you run yourself).
 
+import fs from 'node:fs'
+import path from 'node:path'
 import { spawn } from 'node:child_process'
 import net from 'node:net'
 import { loadProfile } from '../../profiles/index.mjs'
@@ -81,6 +83,11 @@ export async function ensureApp({ repo, onProgress = () => {} }) {
 
   const port = String(u.port || 3000)
   const argv = profile.app.argv(port)
+  // Vite's dependency cache is per worktree and shared by every server ever started here. A server
+  // killed mid-optimize (this runner kills them at the end of every run) leaves it pointing at chunks
+  // that no longer exist: "The file does not exist at .../node_modules/.vite/..." and a blank page.
+  // Clearing it costs ~20s of re-optimisation on first load and removes the failure entirely.
+  try { fs.rmSync(path.join(repo, 'node_modules', '.vite'), { recursive: true, force: true }) } catch { /* nothing to clear */ }
   onProgress(`starting the app on ${url} (${profile.name}: npx ${argv.join(' ')})`)
   child = spawn('npx', argv, {
     cwd: repo, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
