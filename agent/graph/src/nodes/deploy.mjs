@@ -23,7 +23,6 @@
 // the worktree except a deploy-time-only edit for one known pioneer bug, reverted in `finally`.
 import fs from 'node:fs'
 import path from 'node:path'
-import crypto from 'node:crypto'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { loadProfile } from '../../profiles/index.mjs'
@@ -45,7 +44,15 @@ const BENIGN = new Set(['lambdas-fns-collection-filter-ai-processor', 'lambdas-f
   'lambdas-fns-chat-collection-filter-ai', 'lambdas-fns-automations-ai-processor', 'lambdas-fns-chat-automations-ai',
   'lambdas-fns-forms-ai-processor', 'lambdas-fns-chat-forms-ai', 'lambdas-fns-register-device-token'])
 
-export const versionIdFor = (issueKey) => crypto.createHash('md5').update(`agent/${issueKey}-fix\n`).digest('hex').slice(0, 8)
+// ONE agent backend, for every ticket. It started life as the per-ticket version for ESI2-3194
+// (md5 of "agent/ESI2-3194-fix", built and seeded by hand on 2026-09-06) and is kept as THE agent
+// backend on purpose: the QA org's collections, records and automations persist across tickets, so
+// a scenario built once — by the agent or by hand — is there for the next ticket that touches the
+// same feature. Each run only pushes its own Lambdas onto it (minutes). Cost: two runs at once would
+// overwrite each other's Lambdas, which this pipeline never does. Changing this id means a new
+// 30-minute stack build and an empty org — do it deliberately, never for a ticket.
+export const AGENT_VERSION_ID = '238f0e42'
+export const versionIdFor = () => AGENT_VERSION_ID
 
 /** KEY=value lines → object. Comments and blanks skipped; values never logged by callers. */
 export function parseDotenv(text) {
@@ -62,9 +69,9 @@ export function parseDotenv(text) {
   return out
 }
 
-const STATIC_KEYS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN']
+export const STATIC_KEYS = ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN']
 /** process.env without the static keys graph/.env supplies — the deploy must not run as the bot user. */
-function envWithoutStaticKeys() {
+export function envWithoutStaticKeys() {
   const e = { ...process.env }
   for (const k of STATIC_KEYS) delete e[k]
   if (e.PAG_SHELL_AWS_PROFILE) e.AWS_PROFILE = e.PAG_SHELL_AWS_PROFILE
@@ -77,7 +84,7 @@ function envWithoutStaticKeys() {
  * run resolved `export-credentials` on top of graph/.env and got the bot user `panda-code-agent`, whose
  * policy allows Bedrock and nothing else: describe-stacks denied → "no stacks" → a doomed infra build.
  */
-async function exportCredentials() {
+export async function exportCredentials() {
   try {
     const args = ['configure', 'export-credentials', '--format', 'env']
     if (process.env.PAG_SHELL_AWS_PROFILE) args.push('--profile', process.env.PAG_SHELL_AWS_PROFILE)
@@ -177,7 +184,7 @@ export function deployNode({ budget, onProgress = () => {} }) {
     const haveStacks = (await stackExists(`ap-dev-${versionId}-appsync`, env)) && (await stackExists(`ap-dev-${versionId}-services-secondary`, env))
     let builtInfra = false
     if (!haveStacks) {
-      onProgress(`deploy: no stacks for ${versionId} yet — first deploy for this ticket, creating the backend (30–40 min, once)`)
+      onProgress(`deploy: no stacks for ${versionId} yet — creating the agent backend (30–40 min, once ever)`)
       const patched = applySesPreviewGuard(s.repo)
       let r
       try {
