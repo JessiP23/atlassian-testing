@@ -45,17 +45,17 @@ export function loginState({ appUrl, onProgress = () => {} }) {
  * Write the per-run MCP config. Returns its path, or null when the template is missing.
  * A config without a state file is still useful — the model can still SEE, it just starts at /login.
  */
-export function writeConfig({ statePath }) {
+export function writeConfig({ statePath, outDir = path.join(GRAPH_DIR, '.pag', 'qa') }) {
   try {
-    // ABSOLUTE, and OUTSIDE evidence/.
+    // ABSOLUTE, and never inside evidence/.
     //
-    // Two bugs in one line, the first time round. The path was relative, and runClaude runs with
-    // cwd = the product worktree, so Claude Code looked for it under pioneer-agent/ and refused to
-    // start: "MCP config file not found". And it lived under evidence/witness/, where the MCP
-    // server dropped a unix socket — which pushEvidence then tried to copyFileSync, got ENOTSUP,
-    // and abandoned the whole upload. That is why a PR that used to carry the ticket screenshots
-    // suddenly carried none. evidence/ holds evidence; scratch goes here.
-    const outDir = path.join(GRAPH_DIR, '.pag', 'authoring')
+    // Two bugs the first time round. The path was relative, and runClaude runs with cwd = the
+    // product worktree, so Claude Code looked for it under pioneer-agent/ and refused to start.
+    // And it lived under evidence/witness/, where the MCP server dropped a unix socket — which
+    // pushEvidence then tried to copyFileSync, got ENOTSUP, and abandoned the whole upload.
+    // evidence/ holds evidence; the browser's scratch and screenshots go to outDir, and the QA node
+    // copies the PNGs across afterwards.
+    outDir = path.resolve(outDir)
     const tpl = fs.readFileSync(TEMPLATE, 'utf8')
     const cfg = JSON.parse(tpl.replace('__STATE__', statePath || '').replace('__OUT__', outDir))
     if (!statePath) {

@@ -27,18 +27,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { tierFor } from '../lib/models.mjs'
 import { runClaude } from '../lib/agent.mjs'
-import { reproPathFor, reproCommand, runSpec, sha256, saveEvidence, excerpt,
-  witnessSpecPath, witnessCommand, runWitness, collectWitness, shipWitness, WITNESS_FIXTURES } from '../lib/repro.mjs'
-import { ensureApp } from '../lib/app.mjs'
+import { reproPathFor, reproCommand, runSpec, sha256, saveEvidence, excerpt } from '../lib/repro.mjs'
 import { parseGateFailures, formatFailures } from '../lib/gatelog.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
-import * as browsermcp from '../lib/browsermcp.mjs'
 
 const exec = promisify(execFile)
 const ATTEMPTS = Number(process.env.PAG_REPRO_ATTEMPTS || 2)
-// The witness gets one shot, and never the whole phase — see the note where it is used.
-const WITNESS_ATTEMPTS = Number(process.env.PAG_WITNESS_ATTEMPTS || 1)
-const FALLBACK_FLOOR_MS = Number(process.env.PAG_FALLBACK_FLOOR_MS || 150_000)
 const REPRO_BUDGET = Number(process.env.PAG_REPRO_BUDGET || 1.5)
 // This phase's clock is now ONE number owned by lib/budget.mjs (PHASES.reproduce), not a second
 // ceiling maintained here. On KAN-6 the witness iterated for 566s of a 1200s run (oklch colours,
@@ -49,146 +43,12 @@ const REPRO_BUDGET = Number(process.env.PAG_REPRO_BUDGET || 1.5)
 // The phase ceiling is a TOTAL across both attempts, not a fresh allowance per attempt — see
 // Budget.phaseTimeFor. KAN-11 overran 360s -> 553s because this used to recompute from the run's
 // remaining clock, and the overrun was taken out of `patch`.
-// How many attempts the phase can still afford. ESI2-3406: the witness left 150s and this split it
-// in two, so the component rung got 72s, was killed mid-file, and wrote nothing — the floor existed
-// and was then divided into two useless halves. Below 2x the minimum, it is one attempt or none.
+// How many attempts the phase can still afford. Below 2x the minimum it is one attempt or none:
+// two 75s attempts at a component test both die mid-file; one 150s attempt can finish.
 const MIN_ATTEMPT_MS = Number(process.env.PAG_MIN_ATTEMPT_MS || 120_000)
 const attemptsFor = (budget) => (budget.phaseTimeFor('reproduce', 1) >= 2 * MIN_ATTEMPT_MS ? ATTEMPTS : 1)
 const attemptShare = (budget, attempt, attempts = ATTEMPTS) => budget.phaseTimeFor('reproduce', attempts - attempt + 1)
 
-const UI_EVIDENCE = process.env.PAG_UI_EVIDENCE === '1'
-
-// The witness rung: a Playwright spec against the RUNNING app. Same protocol (pass-first, invert,
-// red), different runner, and the artefacts are screenshots + video instead of a jest log.
-// A half-filled .env is worse than an empty one: `PAG_APP_EMAIL=<QA user>` is truthy, so the
-// witness would spend a model call writing a login flow that cannot possibly work. Treat an
-// unreplaced placeholder as absent.
-const real = (v) => {
-  const x = String(v ?? '').trim()
-  return x && !/[<>]/.test(x) && !/^(your|todo|changeme|xxx)/i.test(x) ? x : ''
-}
-const HAS_LOGIN = () => Boolean(real(process.env.PAG_APP_EMAIL) && real(process.env.PAG_APP_PASSWORD))
-
-/**
- * The app's OWN route table, from the index. $0, no model call.
- *
- * ESI2-3406's spec navigated by guessing: `getByRole('link').filter({ hasText: /asset|collection|
- * project|equipment|macs/i })`, then `getByRole('row').nth(1)`, each wrapped in `.catch(() => {})`.
- * It never reached a record, timed out at 180s, and captured nothing. The routes were sitting in
- * `.par/index.json` the whole time — `indexer.mjs` extracts them — and nobody handed them over.
- * A `page.goto()` to a real route is deterministic; clicking through a nav you cannot see is not.
- */
-function appRoutes(profile) {
-  try {
-    const par = process.env.PAG_PAR_DIR || path.resolve(import.meta.dirname, '../../../.par')
-    const idx = JSON.parse(fs.readFileSync(path.join(par, 'index.json'), 'utf8'))
-    const routes = (idx.files || [])
-      .filter((f) => profile.isUi?.(f.path) && (f.routes || []).length)
-      .flatMap((f) => f.routes)
-      .filter((r) => typeof r === 'string' && r.startsWith('/'))
-    return [...new Set(routes)].sort()
-  } catch { return [] }
-}
-
-const WITNESS_PROMPT = (s, { specFile, cmd, appUrl, previous, hasLogin, timeMs = 300_000, routes = [], mcp = false }) => `You are writing a WITNESS for ${s.issueKey}: a Playwright spec that drives the running app
-at ${appUrl} and FAILS because of the bug the ticket reports. You are NOT fixing anything. A separate
-step fixes the code; the app hot-reloads; your spec must then pass unchanged.
-
-## The bug, from the ticket
-${s.spec.summary}
-
-## Acceptance criteria (the EXPECTED behaviour)
-${(s.spec.acceptanceCriteria || []).map((a, i) => `${i + 1}. ${a}`).join('\n')}
-
-## Where the fix will go (read these files in the worktree ${s.repo} to learn routes, labels, test ids)
-${s.plan.impactedFiles.map((f) => `- ${f}`).join('\n')}
-
-## The ONE file you may create — exactly this absolute path, nothing else
-    ${specFile}
-
-Start from:
-    import { test, expect, check, ${hasLogin ? 'login, ' : ''}shot } from '${WITNESS_FIXTURES}'
-${hasLogin
-  ? `- \`login(page)\` signs in as the QA user (env-provided; never hard-code credentials). It handles
-  this app's real sign-in flow, one-step or two-step, and returns once the app has LEFT /login.
-  Do not write your own login, and do not \`waitForURL\` a specific landing route afterwards — the
-  app chooses where to land. Assert \`await expect(page).not.toHaveURL(/\\/login/)\` and go on.`
-  : `- THERE IS NO USABLE LOGIN in this environment. Do NOT import or call \`login\`, do not type any
-  credentials, and do not try to reach a screen behind authentication. You may only visit pages that
-  render WITHOUT signing in: \`/login\`, \`/signup\`, \`/forgot-password\`. If the ticket's symptom is
-  only visible after signing in, stop and answer \`REPRO: none needs an authenticated session\`.`}
-- \`check(page, '02-after-toggle-dark', async () => { ... })\` is HOW YOU ASSERT. It runs soft
-  assertions and screenshots the state it judged. Use it for EVERY acceptance criterion, in the
-  order a user meets them, naming the STATE:
-      01-initial-load · 02-after-toggle-dark · 03-reloaded-still-dark · 04-toggled-back-light
-  Soft matters: a hard \`expect\` throws on the first unmet criterion, so the run's only evidence is
-  one frame of a flow nobody saw. With \`check\` the spec walks the WHOLE flow, captures every
-  state, and still FAILS at the end if any assertion failed. Inside a check use \`expect.soft(...)\`.
-- \`shot(page, 'NN-name')\` alone for a state worth picturing but not asserting.
-- The same spec re-runs after the fix and the PR pairs the two runs BY SCREENSHOT NAME, so keep the
-  names stable and descriptive — \`02-after-toggle-dark\` before vs after is the whole story.
-- Cover BOTH SIDES of a toggle or a mode: if the ticket is about light and dark, assert and shoot
-  light AND dark, not only the new one.
-- Locate elements by role/label/text (\`getByRole\`, \`getByLabel\`, \`getByText\`), never by CSS class.
-  Wait with \`expect(...).toBeVisible()\` / \`toHaveText\`, never \`waitForTimeout\`.
-${routes.length ? `
-## This app's real routes — NAVIGATE, do not hunt
-${routes.map((r) => `    ${r}`).join('\n')}
-\`page.goto('/home/:moduleId/collections/:collectionId')\` with ids you read off the page or the URL
-after one click beats clicking through a navigation you cannot see. Get to the screen by URL first;
-only click for the interaction the ticket is actually about.
-` : ''}
-- NEVER wrap a navigation or a click in \`.catch(() => {})\`. A swallowed failure does not stop the
-  test — it walks on, fails at the final assertion three minutes later with the page already closed,
-  and captures NOTHING. Let it throw at the step that broke: that failure, with its screenshot, is
-  useful evidence and a silent timeout is not.
-- Call \`check\` or \`shot\` EARLY and often — right after login, and after each navigation. A spec
-  that reaches its first screenshot only at the end has no evidence when it times out before then.
-- Keep the whole test under 90 seconds of wall clock. If the screen needs more than about six steps
-  to reach, say so with \`REPRO: none\` instead of writing a spec that will time out.
-- For a layout/padding/colour symptom assert computed style, which is exact and stable:
-  \`await expect(el).toHaveCSS('background-color', 'rgb(43, 5, 72)')\` — Playwright reports colours as
-  \`rgb(r, g, b)\`, so convert any hex in the ticket before asserting.
-- Use only data you create in the test or that clearly already exists; never delete or change account
-  settings. Keep it to ONE test.
-- Do not edit any file under ${s.repo}. Do not commit.
-
-${mcp ? `
-## LOOK AT THE APP FIRST — you have browser tools, use them
-\`browser_navigate\`, \`browser_snapshot\`, \`browser_click\`, \`browser_type\`, \`browser_take_screenshot\`.
-\`browser_snapshot\` returns the page's LIVE ACCESSIBILITY TREE — the real roles, names and labels
-Playwright will match on. That is your eyes. The browser is ALREADY SIGNED IN as the QA user.
-
-Work in this order, and do not skip it:
-1. \`browser_navigate\` to ${appUrl}, then \`browser_snapshot\`. Read what is actually on screen.
-2. Click your way to the screen in the ticket, snapshotting after each step. Note the URL when you
-   arrive — that is the route your spec should \`goto\` directly.
-3. Snapshot the element the ticket is about. Copy its real role and name into your assertion.
-4. ONLY THEN write the spec file, using the selectors you just verified and the direct route.
-5. Run the command below ONCE to confirm it fails for the right reason.
-
-Do NOT write a spec that console.logs the DOM so you can read it back — you have a snapshot tool.
-Do NOT guess a selector you have not seen in a snapshot.
-` : ''}
-## Run it with exactly this command — copy it verbatim, do not reconstruct it
-    ${cmd}
-It is absolute and sets both env vars the config reads; a shortened or relative version writes its
-output where the run cannot collect it, and reinventing it is how the previous attempt spent its
-whole clock. You have about ${Math.round(timeMs / 1000)}s TOTAL for reading, writing and two runs of
-that command, so read only what you need for the route and the selectors.
-
-## Protocol — pass first, then invert
-1. Write the test so its final assertion describes the CURRENT (wrong) behaviour and it PASSES against
-   the running app. Run the command; fix selectors/flow until it passes. This proves login, navigation
-   and locators work.
-2. Invert only the final assertion to the EXPECTED behaviour from the acceptance criteria. Run again.
-   It must now FAIL with a message that shows the wrong state.
-3. Stop, leaving the file in its inverted (failing) state. Check the run produced ONE SCREENSHOT
-   PER \`check\` — if it stopped after the first frame you used a hard \`expect\` where \`check\`
-   belongs.
-${previous ? `\n## Previous attempt\n${previous}\n` : ''}
-Finish with one line: \`REPRO: red\` or \`REPRO: none <one-sentence reason>\` (e.g. the flow needs data the QA
-account does not have, or the symptom is backend-only and not visible in the client).`
 
 const PROMPT = (s, { specFile, cmd, rung, previous }) => `You are writing a REPRODUCING TEST for ${s.issueKey} in the worktree at ${s.repo}.
 You are NOT fixing the bug. The code stays exactly as it is; you add one test file that proves the
@@ -267,40 +127,17 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
     // A red repro survives a re-plan: it pins the symptom, not the fix location.
     if (s.repro?.status === 'red' && fs.existsSync(path.join(s.repo, s.repro.file))) return {}
 
-    let witnessNote = ''
     const profile = loadProfile(s.repo)
     const isUi = (p) => profile.isUi(p)
     const target = (s.plan?.impactedFiles || []).find((f) => /\.[tj]sx?$/.test(f) && !/\.d\.ts$/.test(f))
     const specFile = target && reproPathFor(target)
     let rung = s.plan.impactedFiles.some(isUi) ? 'component' : 'unit'
 
-    // Witness rung: only for web-app targets, only when enabled, only if the app comes up.
-    // A backend-only diff never climbs here — against the shared backend the client would show the
-    // OLD behaviour and the "evidence" would be a lie.
-    //
-    // AND only when it can actually reach the symptom. ESI2-3406's symptom is a tab inside a record
-    // detail view; without credentials the witness can see /login, /signup and /forgot-password and
-    // nothing else, so it spent 187s and $0.29 to answer "needs an authenticated session" — an
-    // answer that was knowable before it started — and left the component rung 173s, in which it
-    // wrote nothing. So: no credentials AND a real unit runner to fall back on -> skip straight to
-    // it. A repo with NO unit runner still tries, because there the witness is the only rung.
-    if (rung === 'component' && UI_EVIDENCE && !HAS_LOGIN() && profile.hasUnitRunner(s.repo)) {
-      onProgress('witness skipped: PAG_APP_EMAIL/PAG_APP_PASSWORD are not set, so it cannot sign in — '
-        + 'the whole reproduce budget goes to the component test instead')
-    } else if (rung === 'component' && UI_EVIDENCE) {
-      const app = await ensureApp({ repo: s.repo, onProgress })
-      if (app) {
-        const w = await witness(s, { budget, onProgress, appUrl: app.url, note: (t) => { witnessNote = t } })
-        if (w) return w
-        onProgress('witness did not reproduce — falling back to a component test')
-      } else onProgress('web-app could not be started — falling back to a component test')
-    }
-
-    // No unit runner in this repo (or no source target): the witness above was the only rung.
+    // No unit runner in this repo (or no source target): nothing to prove at this level.
     const command = specFile && reproCommand(s.repo, specFile)
     if (!command) {
-      return { repro: { status: 'none', rung, witnessNote, reason: specFile
-        ? `this repo has no unit test runner (profile ${profile.name}) — ${rung === 'component' ? 'the browser witness could not reproduce it either' : 'a non-UI symptom cannot be proven here'}`
+      return { repro: { status: 'none', rung, reason: specFile
+        ? `this repo has no unit test runner (profile ${profile.name}) — ${rung === 'component' ? 'a component test needs one' : 'a non-UI symptom cannot be proven here'}`
         : 'no source target to write a test against' } }
     }
 
@@ -311,7 +148,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
       const allowance = Math.min(REPRO_BUDGET, budget.availableFor('repro'))
       const timeMs = attemptShare(budget, attempt, attempts)
       if (allowance < 0.3 || timeMs < 60_000) {
-        return { repro: { status: 'none', witnessNote, reason: `skipped: $${allowance.toFixed(2)} / ${(timeMs / 1000).toFixed(0)}s left`, rung } }
+        return { repro: { status: 'none', reason: `skipped: $${allowance.toFixed(2)} / ${(timeMs / 1000).toFixed(0)}s left`, rung } }
       }
 
       onProgress(`repro attempt ${attempt}/${attempts} (${rung}) -> ${specFile}`)
@@ -356,7 +193,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
       if (!fs.existsSync(path.join(s.repo, specFile))) {
         const said = (r.text.match(/REPRO:\s*none\s*(.*)/i) || [])[1] || 'no test file was written'
         previous = `Attempt ${attempt} wrote no file. It said: ${said}`
-        if (/REPRO:\s*none/i.test(r.text) || r.timedOut) return { repro: { status: 'none', witnessNote, reason: said.trim(), rung, cost: r.cost } }
+        if (/REPRO:\s*none/i.test(r.text) || r.timedOut) return { repro: { status: 'none', reason: said.trim(), rung, cost: r.cost } }
         continue
       }
 
@@ -368,7 +205,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         onProgress('repro is green on the unpatched tree — not a reproduction')
         if (attempt === attempts) {
           fs.rmSync(path.join(s.repo, specFile), { force: true })
-          return { repro: { status: 'none', witnessNote, reason: 'the test passed on the unpatched code — it does not reproduce the symptom', rung } }
+          return { repro: { status: 'none', reason: 'the test passed on the unpatched code — it does not reproduce the symptom', rung } }
         }
         continue
       }
@@ -377,7 +214,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         onProgress('repro did not execute (harness error)')
         if (attempt === attempts) {
           fs.rmSync(path.join(s.repo, specFile), { force: true })
-          return { repro: { status: 'none', witnessNote, reason: 'the test could not be executed (harness error)', rung } }
+          return { repro: { status: 'none', reason: 'the test could not be executed (harness error)', rung } }
         }
         continue
       }
@@ -401,7 +238,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         onProgress('repro is red only because it probes a symbol that does not exist yet — not a reproduction')
         if (attempt === attempts) {
           fs.rmSync(path.join(s.repo, specFile), { force: true })
-          return { repro: { status: 'none', witnessNote, reason: 'the only red the test could produce was a probe for a not-yet-written helper — that is not a reproduction of the symptom', rung } }
+          return { repro: { status: 'none', reason: 'the only red the test could produce was a probe for a not-yet-written helper — that is not a reproduction of the symptom', rung } }
         }
         continue
       }
@@ -433,7 +270,7 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
             // Shipping a lint-dirty test into their repo is worse than shipping no test: it breaks
             // their CI on a file the reviewer did not write. Degrade honestly instead.
             fs.rmSync(path.join(s.repo, specFile), { force: true })
-            return { repro: { status: 'none', rung, witnessNote, reason: `a reproducing test was written and it did fail correctly, but it could not be made to pass this repo's lint (${problems.map((f) => f.rule).filter(Boolean).join(', ')}) and a frozen test cannot be fixed afterwards` } }
+            return { repro: { status: 'none', rung, reason: `a reproducing test was written and it did fail correctly, but it could not be made to pass this repo's lint (${problems.map((f) => f.rule).filter(Boolean).join(', ')}) and a frozen test cannot be fixed afterwards` } }
           }
           continue
         }
@@ -449,131 +286,6 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         repro: { status: 'red', file: specFile, sha, rung, cmd: red.cmd, redExcerpt, attempts: attempt },
       }
     }
-    return { repro: { status: 'none', witnessNote, reason: previous || 'exhausted attempts', rung } }
+    return { repro: { status: 'none', reason: previous || 'exhausted attempts', rung } }
   }
-}
-
-/** The witness rung. Returns a red repro (with before-shots) or null to fall back. */
-async function witness(s, { budget, onProgress, appUrl, note = () => {} }) {
-  const specFile = witnessSpecPath(s.issueKey)
-  if (!specFile) return null
-  const tier = tierFor('repro')
-  const cmd = witnessCommand(specFile)
-  let previous = ''
-  for (let attempt = 1; attempt <= WITNESS_ATTEMPTS; attempt++) {
-    // ONE attempt, and it may not eat the phase.
-    //
-    // ESI2-3406: two witness attempts of 180s each. Both died on `wall-clock budget exhausted`
-    // while the model was still reading files — a witness has to log in, navigate, and run
-    // Playwright TWICE (pass, then inverted), which does not fit in three minutes on an app this
-    // size. The component fallback then got `skipped: 0s left`, so the run produced no evidence at
-    // all and `patch` re-did the whole diagnosis for $3.47.
-    //
-    // So: the witness gets everything except a floor reserved for the fallback rung, once. If it
-    // cannot manage it in that, a second identical attempt will not either — the fallback will.
-    const allowance = Math.min(REPRO_BUDGET, budget.availableFor('repro'))
-    const timeMs = Math.max(0, budget.phaseTimeFor('reproduce', 1) - FALLBACK_FLOOR_MS)
-    if (allowance < 0.3 || timeMs < 120_000) {
-      onProgress(`witness skipped: ${(timeMs / 1000).toFixed(0)}s available after reserving ${FALLBACK_FLOOR_MS / 1000}s for the unit rung — not enough to sign in, navigate and run it twice`)
-      return null
-    }
-
-    // Give it eyes. See lib/browsermcp.mjs for the three runs that made this necessary.
-    let mcpConfig = null
-    if (browsermcp.mcpEnabled() && HAS_LOGIN()) {
-      const statePath = await browsermcp.loginState({ appUrl, onProgress })
-      mcpConfig = browsermcp.writeConfig({ statePath })
-      if (mcpConfig) onProgress(`authoring browser: on${statePath ? ', already signed in' : ' (signed out)'}`)
-    }
-
-    onProgress(`witness attempt ${attempt}/${WITNESS_ATTEMPTS} -> ${specFile}`)
-    const r = await runClaude({
-      cwd: s.repo, model: tier.model, budgetUsd: allowance, timeoutMs: timeMs, onProgress, mcpConfig,
-      prompt: WITNESS_PROMPT(s, { specFile, cmd, appUrl, previous, hasLogin: HAS_LOGIN(), timeMs, routes: appRoutes(loadProfile(s.repo)), mcp: Boolean(mcpConfig) }),
-    })
-    budget.charge('repro', r.cost, { model: tier.model, attempt, subtype: r.subtype, exit: r.code, rung: 'e2e' })
-
-    // The witness never touches the product tree. Revert anything it did.
-    const { stdout: names } = await exec('git', ['diff', '--name-only', 'HEAD'], { cwd: s.repo, maxBuffer: 1 << 24 })
-    const { stdout: untracked } = await exec('git', ['ls-files', '--others', '--exclude-standard'], { cwd: s.repo, maxBuffer: 1 << 24 })
-    const stray = [...new Set([...names.split('\n'), ...untracked.split('\n')].map((x) => x.trim()).filter(Boolean))].filter((p) => !p.startsWith('.pag/'))
-    if (stray.length) {
-      onProgress(`witness touched ${stray.length} file(s) in the worktree — reverting`)
-      const tracked = stray.filter((p) => names.includes(p))
-      if (tracked.length) await exec('git', ['checkout', '--', ...tracked], { cwd: s.repo }).catch(() => {})
-      for (const p of stray.filter((p) => !names.includes(p))) fs.rmSync(path.join(s.repo, p), { recursive: true, force: true })
-    }
-
-    if (!fs.existsSync(specFile)) {
-      if (/REPRO:\s*none/i.test(r.text) || r.timedOut) return null
-      previous = `Attempt ${attempt} wrote no spec file.`
-      continue
-    }
-
-    const red = await runWitness(specFile, 'before')
-    if (red.ok) {
-      previous = `Attempt ${attempt}: the spec PASSED against the unpatched app, so it does not witness the bug. Invert the final assertion to the EXPECTED behaviour.`
-      note('the browser witness signed in and reached the screen, but the symptom was NOT VISIBLE for this account — '
-        + 'the tab was already showing before any fix. This account most likely does not carry the custom role the ticket describes.')
-      onProgress('witness is green on the unpatched app — not a reproduction')
-      if (attempt === ATTEMPTS) { fs.rmSync(specFile, { force: true }); return null }
-      continue
-    }
-    if (/browserType\.launch|Executable doesn't exist|Cannot find (module|package)|SyntaxError|No tests found|\[TIMED OUT\]/.test(red.out)) {
-      previous = `Attempt ${attempt}: the spec did not run:\n${excerpt(red.out)}`
-      onProgress('witness did not execute (harness error)')
-      if (attempt === ATTEMPTS) { fs.rmSync(specFile, { force: true }); return null }
-      continue
-    }
-
-    const before = await collectWitness(red.outDir, 'before')
-
-    // A red with NO SCREENSHOTS did not witness anything.
-    //
-    // ESI2-3406: the spec timed out after 180s having never reached the record, the page closed,
-    // and `check()`'s screenshot threw "Target page, context or browser has been closed". Playwright
-    // reported a failure, so this accepted it as a reproduction — and then the run was hostage to
-    // it: the product fix was correct, verify re-ran the same blind spec, it timed out again, and a
-    // correct patch shipped as an INCOMPLETE hand-over. A witness that captured nothing is worth
-    // strictly less than no witness, because it also blocks the rung that would have worked.
-    // A red is only a reproduction when an ASSERTION failed. Playwright says
-    // `Error: expect(locator).toBeVisible() failed` for that, and `TimeoutError: page.waitForURL`
-    // or `locator.click: Timeout` when the spec never got to the thing it was testing.
-    //
-    // ESI2-3406 twice: first with 0 screenshots (blind hunt, page closed before any could be
-    // taken), then with 2 (login shot + failure frame) dying on `waitForURL(/\/home/)` because the
-    // app lands somewhere else after sign-in. Both look red. Neither witnessed the Attachments tab.
-    // Accepting them made the run hostage to a spec no patch could turn green, and a correct fix
-    // shipped as an INCOMPLETE hand-over.
-    const assertionFailed = /Error:\s*expect\(/.test(red.out)
-    if (!before.shots.length || !assertionFailed) {
-      const why = !before.shots.length
-        ? 'it captured no screenshots at all'
-        : 'it failed on navigation, not on an assertion — it never reached the screen under test'
-      previous = `Attempt ${attempt}: the spec failed, but ${why}, so it does not witness the bug. `
-        + `Get to the screen with fewer, more reliable steps and assert there. Playwright said:\n${excerpt(red.out)}`
-      note(`the browser witness signed in but ${why}, so it could not judge the symptom`)
-      onProgress(`witness failed before reaching the screen (${why}) — not a reproduction`)
-      fs.rmSync(specFile, { force: true })
-      return null
-    }
-
-    saveEvidence('repro-red.log', red.out)
-    onProgress(`witness RED against ${appUrl}: ${before.shots.length} screenshot(s), video ${before.video ? 'yes' : 'no'}`)
-
-    // Put the spec in the repo when the repo can run it, so the reviewer gets the reproducing test
-    // as reviewable, re-runnable code and not only as a picture. Before patch, so the gate covers
-    // it. A repo without @playwright/test returns [] and nothing is added to the diff.
-    const shipped = shipWitness(s.repo, specFile, s.issueKey)
-    if (shipped.length) onProgress(`witness committed to the diff: ${shipped.join(', ')}`)
-
-    return {
-      repro: {
-        status: 'red', rung: 'e2e', file: specFile, sha: sha256(s.repo, specFile), cmd, shipped,
-        redExcerpt: excerpt(red.out), attempts: attempt, appUrl,
-        before: { shots: before.shots.map((f) => path.basename(f)), video: before.video && path.basename(before.video), gif: before.gif && path.basename(before.gif), trace: before.trace && path.basename(before.trace) },
-      },
-    }
-  }
-  return null
 }

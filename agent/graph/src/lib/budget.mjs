@@ -34,7 +34,7 @@
 // Declared in execution order. `needMs` is the TYPICAL cost of that phase, not its worst case:
 // reserving worst cases for everything downstream starves the phase in hand for a run that will
 // not happen. Overruns are absorbed by the next phase's own min().
-export const PHASE_ORDER = ['intake', 'locate', 'planning', 'reproduce', 'patch', 'verify', 'repair', 'package', 'publish']
+export const PHASE_ORDER = ['intake', 'locate', 'planning', 'reproduce', 'patch', 'verify', 'repair', 'browserqa', 'package', 'publish']
 
 export const PHASES = {
   intake:    { ceilMs:  45_000, needMs:  20_000 },
@@ -44,6 +44,11 @@ export const PHASES = {
   patch:     { ceilMs: Number(process.env.PAG_PATCH_MINUTES || 7) * 60_000, needMs: 210_000 },
   verify:    { ceilMs: 240_000, needMs: 120_000 },
   repair:    { ceilMs: 180_000, needMs:      0 },   // optional phase: reserves nothing for itself
+  // Browser QA on the fixed app, after the gate. Optional like repair (reserves nothing upstream), but
+  // it is where a UI ticket's evidence comes from, so its ceiling is generous: Cody's step has 75 min;
+  // 20 is the floor at which a model with eyes can sign in, set up a role, walk the ticket and shoot
+  // each state. Backend tickets skip it entirely and never pay for it.
+  browserqa: { ceilMs: Number(process.env.PAG_QA_MINUTES || 20) * 60_000, needMs: 0 },
   package:   { ceilMs:  60_000, needMs:  20_000 },
   // needMs is what EVERY phase upstream must leave behind, and publish is the deliverable: a
   // Bedrock call for the prose, the evidence branch push, the commit, the push, `gh pr create`

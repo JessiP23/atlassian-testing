@@ -59,7 +59,7 @@ test('hasTimeFor is the gate the graph routes on', () => {
 })
 
 test('the phase order matches the graph, or the reserves are computed against the wrong future', () => {
-  assert.deepEqual(PHASE_ORDER, ['intake', 'locate', 'planning', 'reproduce', 'patch', 'verify', 'repair', 'package', 'publish'])
+  assert.deepEqual(PHASE_ORDER, ['intake', 'locate', 'planning', 'reproduce', 'patch', 'verify', 'repair', 'browserqa', 'package', 'publish'])
   for (const n of PHASE_ORDER) assert.ok(PHASES[n], `${n} is in the order but has no phase entry`)
 })
 

@@ -9,9 +9,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { loadProfile } from '../../profiles/index.mjs'
 
-const GRAPH_DIR = path.resolve(import.meta.dirname, '../..')
-export const WITNESS_CONFIG = path.join(GRAPH_DIR, 'witness/playwright.config.mjs')
-export const WITNESS_FIXTURES = path.join(GRAPH_DIR, 'witness/fixtures.mjs')
 
 const exec = promisify(execFile)
 
@@ -89,47 +86,13 @@ export function excerpt(out, { maxLines = 24 } = {}) {
 
 // ---- the witness rung: a Playwright spec run against the live app -----------------------------
 
-/** Where the generated e2e spec lives: beside the evidence, never in the product repo. */
-export function witnessSpecPath(issueKey) {
-  const runDir = process.env.PAG_RUN_DIR
-  if (!runDir) return null
-  const dir = path.join(runDir, 'evidence', 'witness')
-  fs.mkdirSync(dir, { recursive: true })
-  return path.join(dir, `${issueKey}.spec.mjs`)
-}
-
-export function witnessCommand(specFile) {
-  // cd first: `npx playwright` from the product worktree would try to DOWNLOAD playwright.
-  // PAG_WITNESS_OUT is part of the command, not a default, because whoever runs this by hand
-  // (the patch step does) must not drop screenshots into the working tree.
-  const manual = path.join(path.dirname(path.dirname(specFile)), 'pw-manual')
-  return `cd ${GRAPH_DIR} && PAG_WITNESS_DIR=${path.dirname(specFile)} PAG_WITNESS_OUT=${manual} npx playwright test --config ${WITNESS_CONFIG} ${path.basename(specFile)}`
-}
-
 /**
- * Run the witness spec once. `label` is 'before' or 'after'; artefacts land in
- * evidence/pw-<label>/ so the two passes never overwrite each other.
- * @returns {Promise<{ok:boolean, out:string, cmd:string, outDir:string}>}
- */
-export async function runWitness(specFile, label, { timeoutMs = REPRO_TIMEOUT_MS } = {}) {
-  const outDir = path.join(path.dirname(path.dirname(specFile)), `pw-${label}`)
-  fs.rmSync(outDir, { recursive: true, force: true })
-  const env = { ...process.env, PAG_WITNESS_DIR: path.dirname(specFile), PAG_WITNESS_OUT: outDir, CI: '1' }
-  const argv = ['playwright', 'test', '--config', WITNESS_CONFIG, path.basename(specFile)]
-  try {
-    const { stdout, stderr } = await exec('npx', argv, { cwd: GRAPH_DIR, env, maxBuffer: 1 << 26, timeout: timeoutMs })
-    return { ok: true, out: stdout + stderr, cmd: witnessCommand(specFile), outDir }
-  } catch (e) {
-    return { ok: false, out: `${e.stdout || ''}${e.stderr || ''}${e.killed ? '\n[TIMED OUT]' : ''}`, cmd: witnessCommand(specFile), outDir }
-  }
-}
-
-/**
- * Flatten Playwright's per-test output into evidence/<label>-NN-<name>.png, <label>.webm,
+ * Flatten a browser session's output dir into evidence/<label>-NN-<name>.png, <label>.webm,
  * <label>-trace.zip, and (when ffmpeg is present) <label>.gif ≤ 10 MB so GitHub renders it inline.
+ * Used by the browser-QA node on the MCP server's --output-dir.
  * @returns {{shots:string[], video:string|null, trace:string|null, gif:string|null}}
  */
-export async function collectWitness(outDir, label) {
+export async function collectShots(outDir, label) {
   const runDir = process.env.PAG_RUN_DIR
   const res = { shots: [], video: null, trace: null, gif: null }
   if (!runDir || !fs.existsSync(outDir)) return res
@@ -141,7 +104,7 @@ export async function collectWitness(outDir, label) {
   for (const f of files) {
     const base = path.basename(f)
     if (/\.png$/.test(base) && !/-diff\.png$|-actual\.png$|-expected\.png$/.test(base)) {
-      // Named shots (from fixtures.shot) keep their name; Playwright's automatic ones get numbered.
+      // Shots the model named NN-slug.png keep their name; anything else gets numbered after them.
       const name = /^\d\d-/.test(base) ? base : `${String(++n + 90).padStart(2, '0')}-${base}`
       const to = path.join(dest, `${label}-${name}`)
       fs.copyFileSync(f, to); res.shots.push(to)
@@ -166,49 +129,4 @@ export async function makeGif(webm, gif) {
     if (mb > 10) { fs.rmSync(gif, { force: true }); return null }
     return gif
   } catch { return null }
-}
-
-/**
- * Commit the witness so the reviewer gets the reproducing test AS CODE, not only as a screenshot.
- *
- * The gap this closes: the witness spec lived only in the run folder and in a `<details>` block of
- * the PR body, so the one artefact the whole evidence claim rests on was not in the diff anybody
- * reviewed, and nobody could re-run it after the branch merged.
- *
- * Two constraints make this conditional rather than automatic:
- *
- *   1. It only happens when `profile.e2eDir(repo)` is non-null — i.e. when the repo already has
- *      `@playwright/test`. Dropping a spec plus a config into a repo that cannot run them hands the
- *      reviewer a file that fails on their next push. That is worse than no file.
- *   2. It happens in `reproduce`, BEFORE patch and therefore before the gate, so the committed
- *      files are linted and typechecked like any other code in the diff. Adding them at publish
- *      time would ship unverified files straight into a PR.
- *
- * The fixtures are copied beside the spec and the import is rewritten, so the committed spec is
- * self-contained and runnable with the command the PR prints.
- *
- * @returns {string[]} repo-relative paths written, or [] when this repo cannot host them
- */
-export function shipWitness(repo, specFile, issueKey) {
-  const dir = loadProfile(repo).e2eDir(repo)
-  if (!dir || !specFile || !fs.existsSync(specFile)) return []
-  try {
-    const abs = path.join(repo, dir)
-    fs.mkdirSync(abs, { recursive: true })
-    const written = []
-
-    const fixtures = `pag-fixtures.mjs`
-    fs.copyFileSync(WITNESS_FIXTURES, path.join(abs, fixtures))
-    written.push(path.posix.join(dir, fixtures))
-
-    const specName = `${issueKey}.pag.spec.mjs`
-    const src = fs.readFileSync(specFile, 'utf8')
-      // The generated spec imports the fixtures by absolute path (it runs from the agent's own
-      // directory). Inside the repo that path does not exist on anyone else's machine.
-      .replace(/from\s+['"][^'"]*witness\/fixtures\.mjs['"]/g, `from './${fixtures}'`)
-    fs.writeFileSync(path.join(abs, specName), src)
-    written.push(path.posix.join(dir, specName))
-
-    return written
-  } catch { return [] }
 }

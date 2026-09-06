@@ -19,7 +19,6 @@ import { converseJson } from '../lib/bedrock.mjs'
 import { tierFor, estimateCost } from '../lib/models.mjs'
 import { addComment, transition, AGENT_MARK } from '../lib/jira.mjs'
 import { formatFailures, parseGateFailures } from '../lib/gatelog.mjs'
-import { pairShots } from '../lib/evidence.mjs'
 import { termshot } from '../lib/termshot.mjs'
 
 const exec = promisify(execFile)
@@ -66,34 +65,38 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
     lines.push('</details>', '')
   }
 
+  // ---- VERIFIED ON THE FIXED APP — the browser-QA node's screenshots, in the ticket's own order ---
+  // Cody's shape: the reporter's screenshot IS the before; these are the after. Each caption is the
+  // step the QA session was reproducing when it took the shot, so a reviewer can read the pair as
+  // "they saw this / we now see this" without a state-name pairing algorithm in between.
+  const qa = s.qa
+  if (qa?.shots?.length) {
+    const verdict = qa.status === 'passed' ? 'the reported symptom is gone and the surrounding behaviour still works'
+      : qa.status === 'bugs_unresolved' ? '**the reported symptom is NOT confirmed fixed** — read the summary'
+      : qa.status === 'incomplete' ? 'the session ran out of time before finishing — partial'
+      : qa.status
+    lines.push(`**Verified on the fixed app** (${qa.appUrl || 'local dev server'}, signed in as ${qa.user || 'the QA user'}) — ${verdict}.`, '')
+    if (qa.summary) lines.push(`> ${String(qa.summary).replace(/\n+/g, ' ')}`, '')
+    for (const shot of qa.shots) lines.push(`**${shot.caption || shot.file}**`, '', `![${shot.caption || shot.file}](${href(shot.file)})`, '')
+    if (qa.gif) lines.push(`![walkthrough on the fixed app](${href(qa.gif)})`, '')
+    const links = [qa.video && `[video (webm)](${href(qa.video)})`, qa.trace && `[Playwright trace](${href(qa.trace)})`].filter(Boolean)
+    if (links.length) lines.push(`Full recording: ${links.join(' · ')}`, '')
+    if (qa.unresolved?.length) {
+      lines.push('<details><summary>Open issues the QA session recorded</summary>', '')
+      for (const u of qa.unresolved) lines.push(`- **${u.issue}** — ${u.impact || ''}${u.nextStep ? ` _Next: ${u.nextStep}_` : ''}`)
+      lines.push('', '</details>', '')
+    }
+  } else if (qa?.status && qa.status !== 'skipped') {
+    lines.push(`> **Browser QA ran but captured no screenshots** (${qa.status}). ${qa.summary || ''}`, '')
+  } else if (qa?.reason) {
+    lines.push(`> **Browser QA did not run:** ${qa.reason}`, '')
+  }
+
   if (r?.status === 'red' && e?.reproGreen) {
-    const isE2e = r.rung === 'e2e'
     lines.push(
-      isE2e
-        ? `**Witness:** a Playwright spec drove the running app (${r.appUrl || 'local dev server'}) — written before the fix, frozen (sha256 \`${String(r.sha).slice(0, 12)}\`), red before, green after. The spec is below; screenshots and video are the runner's output.`
-        : `**Reproducing test:** \`${r.file}\` — written before the fix, frozen (sha256 \`${String(r.sha).slice(0, 12)}\`), red before, green after.`,
+      `**Reproducing test:** \`${r.file}\` — written before the fix, frozen (sha256 \`${String(r.sha).slice(0, 12)}\`), red before, green after.`,
       '',
     )
-    if (isE2e && (r.before?.shots?.length || e.after?.shots?.length)) {
-      // PAIR BY STATE NAME, not by index — see lib/evidence.mjs for why, and test/evidence.test.mjs
-      // for the case that proves it (3 before-frames vs 8 after-frames must not shift the rows).
-      const { rows, missingBefore } = pairShots(r.before?.shots || [], e.after?.shots || [])
-      lines.push(
-        `| State | Before (\`${s.baseBranch}@${String(s.baseSha).slice(0, 7)}\`) | After this patch |`,
-        '|---|---|---|',
-      )
-      for (const row of rows) {
-        lines.push(`| **${row.label}** | ${row.before ? `![before ${row.label}](${href(row.before)})` : '_not reached before the fix_'} | ${row.after ? `![after ${row.label}](${href(row.after)})` : '_not reached_'} |`)
-      }
-      lines.push('')
-      if (missingBefore.length) lines.push(`The broken build never reached ${missingBefore.length} of these states — that gap is part of the evidence.`, '')
-      if (e.after?.gif) lines.push(`![walkthrough after the fix](${href(e.after.gif)})`, '')
-      const links = [
-        r.before?.video && `[before.webm](${href(r.before.video)})`, e.after?.video && `[after.webm](${href(e.after.video)})`,
-        r.before?.trace && `[before trace](${href(r.before.trace)})`, e.after?.trace && `[after trace](${href(e.after.trace)})`,
-      ].filter(Boolean)
-      if (links.length) lines.push(`Full video and Playwright traces: ${links.join(' · ')}`, '')
-    }
     // The rendered terminal, when the evidence branch could host it. Text stays underneath either
     // way — the image is what a reviewer looks at, the text is what they can copy and re-run.
     if (terminal?.before || terminal?.after) {
@@ -114,11 +117,10 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
       `<details><summary>After this patch — PASS</summary>`,
       '', '```', (e.greenExcerpt || '').slice(0, 3000), '```', '</details>',
     )
-    // The ticket's symptom is on a screen, the fix is not. Say so, once, where the reviewer is
-    // looking — otherwise a UI-visible bug fixed in a lambda reads as "the agent skipped the UI".
-    // It did not: the local dev server calls the DEPLOYED backend, so a screenshot taken here would
-    // show the OLD behaviour no matter what this patch does. That picture would be a lie.
-    if (!isE2e && s.spec?.symptom?.screen) {
+    // The ticket's symptom is on a screen, the fix is not, and no browser QA ran. Say so once, where
+    // the reviewer is looking: the local dev server calls the DEPLOYED backend, so a screenshot taken
+    // here would show the old behaviour whatever this patch does. That picture would be a lie.
+    if (!qa?.shots?.length && s.spec?.symptom?.screen) {
       lines.push('',
         `> **Why there are no app screenshots.** The symptom appears on ${s.spec.symptom.screen}, but the fix `
         + `is in \`${(s.scope?.owners || []).join(', ') || 'a backend project'}\` — code the local dev server does not run; it calls the `
@@ -126,20 +128,11 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
         + `The unit evidence above exercises the exact values from the ticket instead; the manual steps under `
         + `**How to verify** are how to see it on screen once this is deployed.`)
     }
-    if (isE2e) {
-      let spec = ''
-      try { spec = fs.readFileSync(r.file, 'utf8') } catch { /* not readable here */ }
-      if (spec) lines.push('', '<details><summary>The witness spec (re-run it with the command under How to verify)</summary>', '', '```js', spec.slice(0, 6000), '```', '</details>')
-    }
   } else {
     lines.push(
       `**No reproducing test.** ${r?.reason ? r.reason : 'The reproduce step did not run.'}`,
       'The gate below proves no regressions in the owning projects; it does not prove the reported symptom is gone. Review the diff against the acceptance criteria.',
     )
-    // What the browser witness actually found. "no test file was written" is true and useless when
-    // the witness DID run, signed in and looked: on ESI2-3406 it reported the tab already visible
-    // for this account, which is a finding about the ACCOUNT and belongs in front of a reviewer.
-    if (r?.witnessNote) lines.push('', `> **The browser witness ran.** ${r.witnessNote}`)
     // The gate transcript, rendered. Not a substitute for a red-to-green pair, and labelled as such
     // — but a reviewer of a no-repro PR should still see the output of the commands that ran.
     if (terminal?.gate) {
@@ -148,8 +141,7 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
     }
     // Why the UI was never pictured, in the PR rather than only in a run log. `PAG_UI_EVIDENCE=1`
     // with no credentials is the shape that produced a UI ticket with zero screenshots.
-    if (/authenticated session|could not sign in|cannot sign in/i.test(String(r?.reason || ''))
-      || (process.env.PAG_UI_EVIDENCE === '1' && !process.env.PAG_APP_PASSWORD)) {
+    if (!qa?.shots?.length && (process.env.PAG_UI_EVIDENCE !== '1' || !process.env.PAG_APP_PASSWORD)) {
       lines.push('', '> ⚠ **No UI screenshots.** The browser witness needs a QA account to reach the screen in the '
         + 'ticket, and none is configured for this environment, so it could only see the signed-out pages. '
         + 'Set `PAG_APP_EMAIL` / `PAG_APP_PASSWORD` to a qa user and re-run to get before/after screenshots.')
@@ -168,9 +160,6 @@ export function evidenceBlock(s, budget, href = (f) => `evidence/${f}`, terminal
       `> ⚠ **${s.gate.skipped.join(', ')} was not run** — the run reached its ${budget?.maxMinutes || 20}-minute deadline first. `
       + `Everything else above passed. CI on this PR runs the full gate.`,
     )
-  }
-  if (s.repro?.shipped?.length) {
-    lines.push('', `The witness is in this diff as ${s.repro.shipped.map((f) => `\`${f}\``).join(' + ')}, so it is reviewable and re-runnable after merge.`)
   }
   return lines.join('\n')
 }
@@ -440,14 +429,20 @@ export function publishNode({ budget, dryRun = false }) {
 
     // Body: what changed (files, with the diffstat) before the prose. A reviewer's first question
     // is always "how big is this", and the answer should not be three paragraphs down.
-    const evidenceLabel = (s.repro?.status === 'red' && s.evidence?.reproGreen) ? (s.repro.rung === 'e2e' ? 'evidence:e2e' : 'evidence:repro') : 'evidence:none'
+    // Two independent rungs can each contribute: a frozen unit repro (red -> green) and browser QA on
+    // the fixed app (screenshots of the ticket's steps, passed). The label names the strongest one.
+    const hasRepro = s.repro?.status === 'red' && s.evidence?.reproGreen
+    const hasQa = s.qa?.status === 'passed' && (s.qa.shots || []).length > 0
+    const evidenceLabel = hasQa ? 'evidence:browser' : hasRepro ? 'evidence:repro' : 'evidence:none'
     // Filled in below, before the body is rendered with real hrefs. Declared here because body()
     // closes over it — an explicit local beats reassigning the node's own `s`.
     let terminal = null
     const badCites = citationCheck(pr.body, s.changed)
     const fileList = s.changed.map((f) => `- \`${f}\``).join('\n')
-    const banner = evidenceLabel === 'evidence:e2e' ? 'Evidence: witnessed in the running app — screenshots red → green'
+    const banner = evidenceLabel === 'evidence:browser'
+      ? `Evidence: verified in the running app — ${s.qa.shots.length} screenshot(s)${hasRepro ? ' + reproducing test red → green' : ''}`
       : evidenceLabel === 'evidence:repro' ? 'Evidence: reproducing test red → green'
+      : s.qa?.status === 'bugs_unresolved' ? 'Evidence: browser QA could NOT confirm the fix — read before reviewing'
       : 'Evidence: none — review against the acceptance criteria'
 
     // The hand-over block. A run that reached its deadline with the gate still red used to refuse:
@@ -730,7 +725,7 @@ export function publishNode({ budget, dryRun = false }) {
     // same information regardless.
     try {
       const desc = {
-        'evidence:e2e': 'witnessed in the running app: screenshots red before, green after',
+        'evidence:browser': 'verified in the running app after the fix: screenshots of the ticket\'s steps',
         'evidence:repro': 'reproducing test: red before, green after',
         'evidence:none': 'no reproducing test — review against acceptance criteria',
         'agent:incomplete': 'the agent ran out of clock with the gate red — hand-over, not a fix',
@@ -752,7 +747,7 @@ export function publishNode({ budget, dryRun = false }) {
     // that it answers where it was asked.
     if (process.env.PAG_JIRA_COMMENT !== '0') {
       const evidenceLine = {
-        'evidence:e2e': 'Screenshots of the broken and fixed states are in the PR, paired state by state.',
+        'evidence:browser': 'The fix was verified in the running app; screenshots of the ticket\'s steps are in the PR.',
         'evidence:repro': 'A reproducing test was written before the fix, red on the base commit and green after it.',
         'evidence:none': 'No reproducing test — please review the diff against the acceptance criteria.',
       }[evidenceLabel]

@@ -53,6 +53,9 @@ export const S = Annotation.Root({
   // SAW; the witness pair is what the agent PROVED. A reviewer wants both side by side, so these
   // ride to the evidence branch with everything else and get their own row in the PR body.
   ticketShots: last(),  // [{ file, name }]
+  // Browser QA on the fixed app (nodes/browserqa.mjs): the after-pictures, the verdict, and why it
+  // did not run when it did not. Never blocks publish; publish renders whatever is here.
+  qa: last(),           // { status, summary, shots[{file,caption}], video, gif, trace, unresolved[], reason }
   replans: Annotation({ reducer: (a, b) => (b ?? 0), default: () => 0 }),
 
   // ---- output -------------------------------------------------------------------------------

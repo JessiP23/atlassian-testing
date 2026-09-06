@@ -12,8 +12,8 @@ const green = { gate: { ok: true }, changed: ['app/page.tsx'] }
 const red = { gate: { ok: false, summary: 'lint failed' }, changed: ['app/page.tsx'] }
 
 test('a green gate goes to approve, always', () => {
-  assert.equal(afterVerifyWith(clock(0))(green), 'approve')
-  assert.equal(afterVerifyWith(clock(19.9))(green), 'approve', 'a green run must publish even at the deadline')
+  assert.equal(afterVerifyWith(clock(0))(green), 'browserqa')
+  assert.equal(afterVerifyWith(clock(19.9))(green), 'browserqa', 'a green run must publish even at the deadline')
 })
 
 test('a red gate with attempts and clock goes to repair', () => {
@@ -59,7 +59,7 @@ test('patch escalation re-plans once, with named files, then stops', () => {
 })
 
 test('every route a predicate can return is a node the graph declares', () => {
-  const declared = new Set(['intake', 'locate', 'planning', 'reproduce', 'patch', 'verify', 'repair', 'handover', 'approve', 'publish', 'refuse'])
+  const declared = new Set(['intake', 'locate', 'planning', 'reproduce', 'patch', 'verify', 'repair', 'handover', 'browserqa', 'publish', 'refuse'])
   const returned = [
     afterVerifyWith(clock(0))(green), afterVerifyWith(clock(2))({ ...red, attempts: 0 }),
     afterVerifyWith(clock(19))({ ...red, attempts: 1 }), afterVerifyWith(clock(19))({ gate: { ok: false } }),

@@ -24,24 +24,35 @@ test('a unit-rung PR embeds both terminal images as raw URLs', () => {
   assert.match(md, /After this patch/)
 })
 
-test('a UI-rung PR embeds the paired screenshots AND the terminal images', () => {
+test('a UI ticket embeds the reporter\'s screenshots, the browser-QA after-shots with captions, and the video', () => {
   const s = {
     ...base,
-    repro: {
-      status: 'red', rung: 'e2e', file: '/runs/x/KAN.spec.mjs', sha: 'abc123def456', appUrl: 'http://localhost:3000',
-      before: { shots: ['before-01-initial.png', 'before-02-toggled.png'], video: 'before.webm' },
-    },
-    evidence: {
-      reproGreen: true,
-      after: { shots: ['after-01-initial.png', 'after-02-toggled.png', 'after-03-reloaded.png'], gif: 'after.gif', video: 'after.webm' },
+    ticketShots: [{ file: 'ticket-01-tab-missing.png', name: 'tab-missing.png' }],
+    qa: {
+      status: 'passed', appUrl: 'http://localhost:3000', user: 'qa@example.com',
+      summary: 'Attachments tab now visible for the Read-Only role; adjacent tabs unaffected.',
+      shots: [
+        { file: 'after-01-record-open.png', caption: 'Record 1696 opened as the Read-Only user' },
+        { file: 'after-02-full-details-tabs.png', caption: 'View Full Details: Attachments tab present' },
+      ],
+      video: 'after.webm', gif: 'after.gif', trace: 'after-trace.zip', unresolved: [],
     },
   }
-  const md = evidenceBlock(s, budget, href, { before: 'terminal-before.png', after: 'terminal-after.png' })
-  for (const f of ['before-01-initial.png', 'after-01-initial.png', 'after-03-reloaded.png', 'after.gif', 'terminal-before.png']) {
-    assert.ok(md.includes(encodeURIComponent(f)), `${f} is missing from the PR body`)
+  const md = evidenceBlock(s, budget, href, null)
+  assert.ok(md.indexOf('Reported in the ticket') < md.indexOf('Verified on the fixed app'), 'before comes before after')
+  for (const f of ['ticket-01-tab-missing.png', 'after-01-record-open.png', 'after-02-full-details-tabs.png', 'after.gif', 'after.webm', 'after-trace.zip']) {
+    assert.ok(md.includes(encodeURIComponent(f)) || md.includes(f), `${f} is missing from the PR body`)
   }
-  assert.match(md, /_not reached before the fix_/)   // the state the broken build never got to
-  assert.ok(!/\]\(evidence\//.test(md))
+  assert.match(md, /Attachments tab present/)
+  assert.match(md, /the reported symptom is gone/)
+})
+
+test('a browser QA that could not confirm the fix says so instead of looking green', () => {
+  const s = { ...base, qa: { status: 'bugs_unresolved', summary: 'tab still hidden for the custom role', shots: [{ file: 'after-01-still-hidden.png', caption: 'still hidden' }], unresolved: [{ issue: 'tab hidden', impact: 'bug not fixed', nextStep: 'check validateAccess for custom roles' }] } }
+  const md = evidenceBlock(s, budget, href, null)
+  assert.match(md, /NOT confirmed fixed/)
+  assert.match(md, /Open issues the QA session recorded/)
+  assert.match(md, /check validateAccess for custom roles/)
 })
 
 test('no images captured still produces a readable evidence section', () => {
@@ -120,27 +131,15 @@ test('a UI symptom fixed in a lambda says why no app screenshots exist', () => {
   assert.match(out, /deployed backend/)
 })
 
-test('a witnessed UI run does not carry that explanation', () => {
+test('a run with browser-QA screenshots does not carry that explanation', () => {
   const s = {
     issueKey: 'X-1', baseBranch: 'main', baseSha: 'abc',
     spec: { symptom: { screen: 'the record detail tab bar' } },
-    repro: { status: 'red', rung: 'e2e', file: 'e2e/x.spec.mjs', sha: 'aa', redExcerpt: 'FAIL', before: { shots: [] } },
-    evidence: { reproGreen: true, greenExcerpt: 'PASS', after: { shots: [] } },
+    repro: { status: 'red', rung: 'component', file: 'x.repro.test.tsx', sha: 'aa', redExcerpt: 'FAIL' },
+    evidence: { reproGreen: true, greenExcerpt: 'PASS' },
+    qa: { status: 'passed', shots: [{ file: 'after-01.png', caption: 'tab visible' }] },
     gate: { ok: true, summary: 'green' }, scope: { owners: ['w'] },
   }
   assert.doesNotMatch(evidenceBlock(s, {}, (f) => f, null), /Why there are no app screenshots/)
 })
 
-test("the witness's own finding reaches the PR, not just 'no test file was written'", () => {
-  const s = {
-    issueKey: 'ESI2-3406', baseBranch: 'main', baseSha: 'abc1234',
-    repro: {
-      status: 'none', reason: 'no test file was written',
-      witnessNote: 'the browser witness signed in and reached the screen, but the symptom was NOT VISIBLE for this account',
-    },
-    gate: { ok: true, summary: 'green' }, scope: { owners: ['clients-web-app'] },
-  }
-  const out = evidenceBlock(s, { maxMinutes: 30 }, (f) => `E/${f}`, null)
-  assert.match(out, /The browser witness ran/)
-  assert.match(out, /NOT VISIBLE for this account/)
-})

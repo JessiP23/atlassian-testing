@@ -1,0 +1,8 @@
+# Per-run scratch and secrets-bearing state. Never committed.
+# .pag/  — baked browser login state (session tokens), MCP configs, QA screenshots in flight
+# runs/  — per-run traces, diffs, evidence (the evidence itself lives on the agent-evidence branch)
+# _to_delete/ — files removed from the workflow, parked for the operator to delete
+.pag/
+runs/
+_to_delete/
+.env

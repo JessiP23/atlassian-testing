@@ -28,8 +28,8 @@ import { promisify } from 'node:util'
 import { scopeFor, commandsFor } from '../lib/scope.mjs'
 import { verdict, summarise } from '../lib/baseline.mjs'
 import * as snap from '../lib/snapshot.mjs'
-import { runSpec, sha256, saveEvidence, excerpt, runWitness, collectWitness } from '../lib/repro.mjs'
-import { ensureApp, stopApp, warmApp } from '../lib/app.mjs'
+import { runSpec, sha256, saveEvidence, excerpt } from '../lib/repro.mjs'
+import { stopApp } from '../lib/app.mjs'
 import { scanDiff, formatFindings } from '../lib/secrets.mjs'
 import { parseGateFailures, summariseFailures } from '../lib/gatelog.mjs'
 import fs from 'node:fs'
@@ -102,18 +102,7 @@ export function verifyNode({ budget, onProgress = () => {} } = {}) {
         }
       }
       onProgress(`repro: re-running ${s.repro.file}`)
-      let green, after = null
-      if (s.repro.rung === 'e2e') {
-        // Same dev server, same spec; HMR has already applied the patch. If the server died,
-        // bring it back — a witness that cannot run is a gate failure, not a pass.
-        const app = await ensureApp({ repo: s.repo, onProgress })
-        if (!app) return { gate: { ok: false, target: 'repro', summary: 'the app could not be started for the witness re-run', newFailures: [], preExisting: [], failures: [], logTail: '' } }
-        await new Promise((r) => setTimeout(r, 3_000)) // let HMR settle
-        green = await runWitness(s.repro.file, 'after')
-        if (green.ok) after = await collectWitness(green.outDir, 'after')
-      } else {
-        green = await runSpec(s.repo, s.repro.file)
-      }
+      const green = await runSpec(s.repo, s.repro.file)
       if (!green.ok) {
         onProgress('repro still RED after patch')
         const failures = parseGateFailures(green.out, 'repro')
@@ -126,11 +115,8 @@ export function verifyNode({ budget, onProgress = () => {} } = {}) {
         }
       }
       saveEvidence('repro-green.log', green.out)
-      evidence = {
-        reproGreen: true, greenExcerpt: excerpt(green.out),
-        after: after && { shots: after.shots.map((f) => path.basename(f)), video: after.video && path.basename(after.video), gif: after.gif && path.basename(after.gif), trace: after.trace && path.basename(after.trace) },
-      }
-      onProgress(`repro GREEN on the patched tree${after ? ` — ${after.shots.length} screenshot(s), gif ${after.gif ? 'yes' : 'no'}` : ''}`)
+      evidence = { reproGreen: true, greenExcerpt: excerpt(green.out) }
+      onProgress('repro GREEN on the patched tree')
     }
 
     // ---- what CI's format:check will see, before the gate sees it ----------------------------
@@ -200,13 +186,6 @@ export function verifyNode({ budget, onProgress = () => {} } = {}) {
       onProgress(`gate ${c.target}: ${c.projects.length} project(s), exclusive`)
       stopApp()
       results.push({ ...c, ...(await run(s.repo, c.argv, slice())) })
-    }
-    // If this verify pass ends up going to repair, the NEXT pass has to re-run the witness — and
-    // `stopApp()` above just killed the server, so it would pay a 20-40s cold boot inside its own
-    // slice. Start it warming in the background now instead; if the gate was green nothing else
-    // asks for it and `stopApp()` in ci.mjs's finally block cleans it up.
-    if (serial.length && s.repro?.rung === 'e2e' && !budget?.pastDeadline()) {
-      warmApp({ repo: s.repo, onProgress })
     }
 
     // The gate's own transcript, kept whether it passed or failed. This is the ONLY command output
