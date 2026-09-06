@@ -190,15 +190,22 @@ export function deployNode({ budget, onProgress = () => {} }) {
     }
 
     // ---- 2. the Lambdas this patch touches ---------------------------------------------------------
-    onProgress('deploy: pushing the affected Lambdas')
-    const lam = await runStep('npx', ['nx', 'affected', '--target', 'deploy:version', '--projects', 'tag:type:lambda', '--base', s.baseSha, '--parallel', '5'],
-      { cwd: s.repo, env, maxMs: LAMBDAS_MAX_MS, label: 'pushing Lambdas', onProgress, log })
+    // Two steps, not `nx affected --projects`: in nx 19 that flag is not a filter on `affected`, it is
+    // forwarded to every task, so each lambda.sh got `--projects tag:type:lambda` and died with
+    // "Unsupported flag" (run r4). `show projects --affected --projects <tag>` IS a filter.
+    const list = await runStep('npx', ['nx', 'show', 'projects', '--affected', '--base', s.baseSha, '--projects', 'tag:type:lambda', '--sep', ','],
+      { cwd: s.repo, env, maxMs: 180_000, label: 'listing affected Lambdas', onProgress, log: [] })
+    const projects = (list.tail.trim().split('\n').pop() || '').split(',').map((x) => x.trim()).filter((x) => /^lambdas-/.test(x))
+    if (list.code !== 0 || !projects.length) return fail('lambdas', list.code !== 0 ? `nx show projects exited ${list.code}` : 'nx reports no affected Lambda for this patch', list.tail)
+    onProgress(`deploy: pushing ${projects.length} affected Lambda(s)`)
+    const lam = await runStep('npx', ['nx', 'run-many', '--target', 'deploy:version', '--projects', projects.join(','), '--parallel', '5'],
+      { cwd: s.repo, env, maxMs: LAMBDAS_MAX_MS, label: `pushing ${projects.length} Lambdas`, onProgress, log })
     const failed = failedProjects(lam.tail)
     const real = failed.filter((p) => !BENIGN.has(p))
     if (lam.code !== 0 && (real.length || !failed.length)) {
       return fail('lambdas', lam.timedOut ? `Lambda deploy exceeded ${LAMBDAS_MAX_MS / 60_000} min` : real.length ? `Lambda deploy failed for ${real.join(', ')}` : `nx affected exited ${lam.code}`, lam.tail)
     }
-    const deployedCount = (lam.tail.match(/✔\s+nx run [A-Za-z0-9_-]+:deploy:version/g) || []).length
+    const deployedCount = projects.length - failed.length
 
     // ---- 3. register + resolve --------------------------------------------------------------------
     const up = await runStep('npm', ['run', 'version:upsert'], { cwd: s.repo, env, maxMs: STEP_MAX_MS, label: 'registering the version', onProgress, log })
