@@ -150,7 +150,7 @@ export function patchNode({ budget, onProgress = () => {} }) {
     // environment" — there is nobody to answer the prompt. Safe because the blast radius is bounded
     // by construction: a disposable worktree, git denied at the tool layer, the real diff checked
     // against the plan's allowlist afterwards, and now a wall-clock kill.
-    const { code, cost, subtype } = await runClaude({
+    const { code, cost, subtype, text: report } = await runClaude({
       cwd: s.repo, prompt: PROMPT(s, ctx), model: tier.model, budgetUsd: allowance, timeoutMs: timeMs, onProgress,
     })
     budget.charge('patch', cost, { model: tier.model, subtype, exit: code })
@@ -260,6 +260,10 @@ export function patchNode({ budget, onProgress = () => {} }) {
       }
     }
 
-    return { changed, diffStat, attempts: 0 }
+    // The session's closing message is its own account of the root cause and the change. It is the
+    // only place that story exists — the plan predates the code and publish must not paraphrase a
+    // plan as if it were the diff (ESI2-3406 r8/r9: the PR cited a missing validateAccess call that
+    // was never missing).
+    return { changed, diffStat, attempts: 0, patchReport: String(report || '').slice(0, 6000) }
   }
 }

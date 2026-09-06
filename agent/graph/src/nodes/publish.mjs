@@ -403,6 +403,13 @@ export function publishNode({ budget, dryRun = false }) {
     const tier = tierFor('package')
 
     const { stdout: diff } = await git(s.repo, ['diff', 'HEAD', '--stat'])
+    // The writer sees the CODE, not the plan. The plan is a forecast written before any file was
+    // read; the diff is what happened. Product hunks first, tests after, capped so a Haiku call stays
+    // cents — the reviewer reads the full diff on GitHub anyway.
+    const { stdout: fullDiff } = await git(s.repo, ['diff', 'HEAD', '--', ...(s.changed || [])]).catch(() => ({ stdout: '' }))
+    const isTest = (h) => /\.(test|spec)\.[cm]?[jt]sx?\b|__tests__\//.test(h.split('\n')[0])
+    const hunks = fullDiff.split(/^(?=diff --git )/m).filter(Boolean)
+    const codeDiff = [...hunks.filter((h) => !isTest(h)), ...hunks.filter(isTest)].join('').slice(0, 14_000)
     const { data, inTok, outTok } = await converseJson({
       model: tier.model,
       system: SYSTEM,
@@ -410,10 +417,10 @@ export function publishNode({ budget, dryRun = false }) {
       user: [
         `ISSUE: ${s.issueKey} — ${s.spec.summary}`,
         `ACCEPTANCE:\n${(s.spec.acceptanceCriteria || []).map((a) => `- ${a}`).join('\n')}`,
-        `PLAN STEPS:\n${(s.plan.steps || []).map((a) => `- ${a}`).join('\n')}`,
-        `TESTS ADDED:\n${(s.plan.newTests || []).map((t) => `- ${t.file}: ${t.pins}`).join('\n')}`,
+        s.patchReport ? `WHAT THE PATCH SESSION SAID WHEN IT FINISHED (its own root-cause account — trust it over the plan):\n${s.patchReport}` : `PLAN STEPS (a forecast, written before the code was read):\n${(s.plan.steps || []).map((a) => `- ${a}`).join('\n')}`,
         `GATE: ${s.gate.summary}`,
         `DIFFSTAT:\n${diff}`,
+        `THE DIFF (describe THIS; testNotes must describe the test files in it, not planned tests):\n${codeDiff}`,
       ].join('\n\n'),
     })
     budget.charge('package', estimateCost(tier, inTok, outTok), { model: tier.model, inTok, outTok })
@@ -443,6 +450,7 @@ export function publishNode({ budget, dryRun = false }) {
       ? `Evidence: verified in the running app — ${s.qa.shots.length} screenshot(s)${hasRepro ? ' + reproducing test red → green' : ''}`
       : evidenceLabel === 'evidence:repro' ? 'Evidence: reproducing test red → green'
       : s.qa?.status === 'bugs_unresolved' ? 'Evidence: browser QA could NOT confirm the fix — read before reviewing'
+      : s.qa?.status === 'incomplete' && (s.qa.shots || []).length ? 'Evidence: browser QA ran but could not reach the ticket scenario — see why below, then review against the acceptance criteria'
       : 'Evidence: none — review against the acceptance criteria'
 
     // The hand-over block. A run that reached its deadline with the gate still red used to refuse:

@@ -94,13 +94,17 @@ this session at any moment; the file must be true at every moment:
 \`status\`: \`passed\` (bug confirmed gone, nothing else broken) · \`bugs_unresolved\` (the bug, or a regression,
 is still visible) · \`incomplete\` (you did not finish). Never leave a stale optimistic status.
 
-## Data setup — you are allowed to create what the ticket needs
+${process.env.PAG_QA_READONLY === '1' ? `## Read-only account — do not create or change anything
+The account you hold belongs to a colleague and is BORROWED. Do not create, invite, edit, configure, upload or
+delete anything — no roles, users, fields, records, settings, not even a draft. Only navigate, read and screenshot.
+If the ticket cannot be reproduced without data setup, say exactly what data would be needed in
+\`unresolvedIssues\` and finish as \`incomplete\`.` : `## Data setup — you are allowed to create what the ticket needs
 The account you hold is an admin. If the ticket is about a ROLE, a PERMISSION, a specific FIELD CONFIGURATION or
 a record that this account does not have: create it. Create a custom role with exactly the permissions the
 ticket names, create or invite a user with that role (any name; use a +tag on the QA email), configure the field
 as the ticket describes, create a record with the ticket's values. Then sign out and sign in AS THAT USER to
 reproduce — the bug may be invisible to an admin (ESI2-3406 is). Never delete anything, never change an existing
-user's role, never touch account or organisation settings beyond what the ticket needs.
+user's role, never touch account or organisation settings beyond what the ticket needs.`}
 
 ## Do this, in order
 1. Write the outcome file.
@@ -170,7 +174,7 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
       const base = path.basename(f)
       const original = base.replace(/^after-(\d\d-)?/, (_, n) => n || '')
       return { file: base, caption: captions.get(base) || captions.get(original) || null }
-    })
+    }).filter((x) => x.caption || !captions.size) // probe shots the model did not caption stay out once it captioned any
     saveEvidence('qa-result.json', JSON.stringify(result, null, 2))
     const status = result.status || (r.timedOut ? 'incomplete' : shots.length ? 'incomplete' : 'no_output')
     onProgress(`browser QA: ${status} — ${shots.length} screenshot(s), video ${got.video ? 'yes' : 'no'}, trace ${got.trace ? 'yes' : 'no'}`)

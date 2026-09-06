@@ -38,6 +38,7 @@ export const S = Annotation.Root({
 
   // ---- patch / verify loop ------------------------------------------------------------------
   changed: last(),           // real `git diff --name-only` result, post-patch
+  patchReport: last(),       // the patch session's closing message: its root cause + what it changed
   diffStat: last(),          // { files, insertions, deletions }
   scope: last(),             // { owners[], typeConsumers[], plan[] } from lib/scope.mjs
   gate: last(),              // { ok, target, summary, newFailures[], preExisting[], logTail }
