@@ -23,6 +23,7 @@
 // the worktree except a deploy-time-only edit for one known pioneer bug, reverted in `finally`.
 import fs from 'node:fs'
 import path from 'node:path'
+import crypto from 'node:crypto'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { loadProfile } from '../../profiles/index.mjs'
@@ -197,22 +198,37 @@ export function deployNode({ budget, onProgress = () => {} }) {
     }
 
     // ---- 2. the Lambdas this patch touches ---------------------------------------------------------
+    //
+    // Byte-identical patch already on the backend → nothing to push. Reruns of the same ticket (five of
+    // them on ESI2-3194 today) spent 19 min each re-deploying 126 Lambdas that had not changed.
+    const diffText = fs.existsSync(path.join(process.env.PAG_RUN_DIR || '', 'patch.diff')) ? fs.readFileSync(path.join(process.env.PAG_RUN_DIR, 'patch.diff'), 'utf8') : ''
+    const diffSha = crypto.createHash('sha256').update(diffText).digest('hex').slice(0, 16)
+    const marker = path.join(GRAPH_DIR, '.pag', 'deploy', `${versionId}.deployed.json`)
+    let already = null
+    try { already = JSON.parse(fs.readFileSync(marker, 'utf8')) } catch { /* nothing deployed yet */ }
+    let failed = [], projects = [], deployedCount = already?.lambdas ?? 0
+    if (already?.diffSha === diffSha && already?.baseSha === s.baseSha && diffText) {
+      onProgress(`deploy: this exact patch is already on backend ${versionId} (pushed ${already.at}) — skipping the Lambda push`)
+    } else {
     // Two steps, not `nx affected --projects`: in nx 19 that flag is not a filter on `affected`, it is
     // forwarded to every task, so each lambda.sh got `--projects tag:type:lambda` and died with
     // "Unsupported flag" (run r4). `show projects --affected --projects <tag>` IS a filter.
     const list = await runStep('npx', ['nx', 'show', 'projects', '--affected', '--base', s.baseSha, '--projects', 'tag:type:lambda', '--sep', ','],
       { cwd: s.repo, env, maxMs: 180_000, label: 'listing affected Lambdas', onProgress, log: [] })
-    const projects = (list.tail.trim().split('\n').pop() || '').split(',').map((x) => x.trim()).filter((x) => /^lambdas-/.test(x))
+    projects = (list.tail.trim().split('\n').pop() || '').split(',').map((x) => x.trim()).filter((x) => /^lambdas-/.test(x))
     if (list.code !== 0 || !projects.length) return fail('lambdas', list.code !== 0 ? `nx show projects exited ${list.code}` : 'nx reports no affected Lambda for this patch', list.tail)
     onProgress(`deploy: pushing ${projects.length} affected Lambda(s)`)
     const lam = await runStep('npx', ['nx', 'run-many', '--target', 'deploy:version', '--projects', projects.join(','), '--parallel', '5'],
       { cwd: s.repo, env, maxMs: LAMBDAS_MAX_MS, label: `pushing ${projects.length} Lambdas`, onProgress, log })
-    const failed = failedProjects(lam.tail)
+    failed = failedProjects(lam.tail)
     const real = failed.filter((p) => !BENIGN.has(p))
     if (lam.code !== 0 && (real.length || !failed.length)) {
       return fail('lambdas', lam.timedOut ? `Lambda deploy exceeded ${LAMBDAS_MAX_MS / 60_000} min` : real.length ? `Lambda deploy failed for ${real.join(', ')}` : `nx affected exited ${lam.code}`, lam.tail)
     }
-    const deployedCount = projects.length - failed.length
+    deployedCount = projects.length - failed.length
+    fs.mkdirSync(path.dirname(marker), { recursive: true })
+    fs.writeFileSync(marker, JSON.stringify({ diffSha, baseSha: s.baseSha, at: new Date().toISOString(), lambdas: deployedCount, issueKey: s.issueKey }))
+    }
 
     // ---- 3. register + resolve --------------------------------------------------------------------
     const up = await runStep('npm', ['run', 'version:upsert'], { cwd: s.repo, env, maxMs: STEP_MAX_MS, label: 'registering the version', onProgress, log })
@@ -262,7 +278,7 @@ export function deployNode({ budget, onProgress = () => {} }) {
     onProgress(`deploy: backend ${versionId} is live — ${builtInfra ? 'stacks created, ' : ''}${deployedCount} Lambda(s) pushed${seeded ? ', QA org seeded' : ''} — ${minutes.toFixed(0)} min (not counted against the deadline)`)
     return {
       backend: {
-        status: 'deployed', versionId, builtInfra, lambdas: deployedCount, seeded, minutes: Number(minutes.toFixed(1)),
+        status: 'deployed', versionId, builtInfra, lambdas: deployedCount, reused: !!(already?.diffSha === diffSha), seeded, minutes: Number(minutes.toFixed(1)),
         appsyncUrl: vite.VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT, userPoolId: vite.VITE_APP_AWS_COGNITO_USER_POOL_ID,
         benign: failed.filter((p) => BENIGN.has(p)),
       },

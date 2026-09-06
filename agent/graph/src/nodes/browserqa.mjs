@@ -27,7 +27,7 @@ import { loadProfile } from '../../profiles/index.mjs'
 import * as browsermcp from '../lib/browsermcp.mjs'
 
 const UI_EVIDENCE = process.env.PAG_UI_EVIDENCE === '1'
-const QA_BUDGET_USD = Number(process.env.PAG_QA_BUDGET || 4)
+const QA_BUDGET_USD = Number(process.env.PAG_QA_BUDGET || 8) // $4 bought ~6 min of Opus driving a browser: enough to verify, never to build
 const real = (v) => { const x = String(v ?? '').trim(); return x && !/[<>]/.test(x) && !/^(your|todo|changeme|xxx)/i.test(x) ? x : '' }
 const HAS_LOGIN = () => Boolean(real(process.env.PAG_APP_EMAIL) && real(process.env.PAG_APP_PASSWORD))
 
