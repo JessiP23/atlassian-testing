@@ -16,33 +16,50 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { AGENT_VERSION_ID, REGISTRY, registryEntries } from '../src/nodes/deploy.mjs'
 
-const branch = process.argv[2] || 'qa'
-const developer = process.argv[3] || (branch === 'qa' ? 'Shared Account' : branch === 'demo' ? 'Demo' : null)
 const envPath = path.join(path.dirname(import.meta.dirname), '.env')
 
-const apis = await registryEntries()
-if (!apis) { console.error(`could not read ${REGISTRY}`); process.exit(1) }
-const api = branch === 'agent'
-  ? apis.find((a) => a.versionId === AGENT_VERSION_ID)
-  : apis.find((a) => a.branch === branch && (!developer || a.developer === developer)) || apis.find((a) => a.branch === branch)
-if (!api) {
-  if (branch === 'agent') console.error(`the agent backend (version ${AGENT_VERSION_ID}) is not in ${REGISTRY} — it is published by the deploy phase's version:upsert; run a ticket with a backend change first`)
-  else console.error(`no "${branch}" backend in ${REGISTRY}. Branches there: ${[...new Set(apis.map((a) => a.branch))].slice(0, 25).join(', ')}`)
-  process.exit(1)
+/** The `# backend:` line `pointAt` wrote last time → { branch, developer } or null. */
+export function currentChoice() {
+  const line = (fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : '').split('\n').find((l) => l.startsWith('# backend:'))
+  const m = line && /^# backend: (\S+) released by (.+?), version /.exec(line)
+  return m ? { branch: m[1], developer: m[2] } : null
 }
 
-const vars = {
-  VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT: api.url,
-  VITE_APP_AWS_APPSYNC_API_KEY: api.apiKey,
-  VITE_APP_AWS_DOMAIN_API_KEY: api.domainKey,
-  VITE_APP_AWS_COGNITO_USER_POOL_ID: api.userPoolId,
-  VITE_APP_AWS_COGNITO_USER_POOL_WEB_CLIENT_ID: api.userPoolWebClientId,
-  VITE_APP_AWS_COGNITO_REGION: api.region || 'us-east-1',
+/** Write the registry's current values for a backend into graph/.env. Returns the entry, or throws with a one-line reason. */
+export async function pointAt(branch = 'qa', developer) {
+  developer = developer || (branch === 'qa' ? 'Shared Account' : branch === 'demo' ? 'Demo' : null)
+  const apis = await registryEntries()
+  if (!apis) throw new Error(`could not read ${REGISTRY}`)
+  const api = branch === 'agent'
+    ? apis.find((a) => a.versionId === AGENT_VERSION_ID)
+    : apis.find((a) => a.branch === branch && (!developer || a.developer === developer)) || apis.find((a) => a.branch === branch)
+  if (!api) {
+    if (branch === 'agent') throw new Error(`the agent backend (version ${AGENT_VERSION_ID}) is not in ${REGISTRY} — it is published by the deploy phase's version:upsert; run a ticket with a backend change first`)
+    throw new Error(`no "${branch}" backend in ${REGISTRY}. Branches there: ${[...new Set(apis.map((a) => a.branch))].slice(0, 25).join(', ')}`)
+  }
+  const vars = {
+    VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT: api.url,
+    VITE_APP_AWS_APPSYNC_API_KEY: api.apiKey,
+    VITE_APP_AWS_DOMAIN_API_KEY: api.domainKey,
+    VITE_APP_AWS_COGNITO_USER_POOL_ID: api.userPoolId,
+    VITE_APP_AWS_COGNITO_USER_POOL_WEB_CLIENT_ID: api.userPoolWebClientId,
+    VITE_APP_AWS_COGNITO_REGION: api.region || 'us-east-1',
+  }
+  const kept = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8').split('\n').filter((l) => !/^(VITE_APP_AWS_|# backend:)/.test(l)) : []
+  while (kept.length && kept.at(-1) === '') kept.pop()
+  const own = api.versionId === AGENT_VERSION_ID
+  const block = [`# backend: ${api.branch} released by ${api.developer}, version ${api.versionId}${own ? ' (the agent backend — deploys land here)' : ' (shared — no deploys; backend fixes are QA\'d in observe mode)'}, from ${REGISTRY} on ${new Date().toISOString().slice(0, 10)} — rerun \`npm run backend\` if it is redeployed`,
+    ...Object.entries(vars).map(([k, v]) => `${k}=${v}`)]
+  fs.writeFileSync(envPath, [...kept, '', ...block, ''].join('\n'), { mode: 0o600 })
+  for (const [k, v] of Object.entries(vars)) process.env[k] = v   // the process that called us sees the new backend too
+  return { ...api, own, changed: kept.length !== 0 }
 }
-const kept = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8').split('\n').filter((l) => !/^(VITE_APP_AWS_|# backend:)/.test(l)) : []
-while (kept.length && kept.at(-1) === '') kept.pop()
-const own = api.versionId === AGENT_VERSION_ID
-const block = [`# backend: ${api.branch} released by ${api.developer}, version ${api.versionId}${own ? ' (the agent backend — deploys land here)' : ' (shared — no deploys; backend fixes are QA\'d in observe mode)'}, from ${REGISTRY} on ${new Date().toISOString().slice(0, 10)} — rerun \`npm run backend\` if it is redeployed`,
-  ...Object.entries(vars).map(([k, v]) => `${k}=${v}`)]
-fs.writeFileSync(envPath, [...kept, '', ...block, ''].join('\n'), { mode: 0o600 })
-console.log(`${api.branch} (released by ${api.developer}, version ${api.versionId}${own ? ' — the agent backend' : ' — shared, no deploys from here'})\n  api   ${api.url}\n  pool  ${api.userPoolId}  client ${api.userPoolWebClientId}\n  written to ${envPath}`)
+
+export const describe = (api) => `${api.branch} (released by ${api.developer}, version ${api.versionId}${api.own ? ' — the agent backend' : ' — shared, no deploys from here'})\n  api   ${api.url}\n  pool  ${api.userPoolId}  client ${api.userPoolWebClientId}`
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.meta.filename)) {
+  try {
+    const api = await pointAt(process.argv[2] || 'qa', process.argv[3])
+    console.log(`${describe(api)}\n  written to ${envPath}`)
+  } catch (e) { console.error(e.message); process.exit(1) }
+}

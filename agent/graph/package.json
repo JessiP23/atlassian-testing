@@ -17,7 +17,7 @@
     "wt": "node bin/prepare-worktree.mjs --repo ${PAG_WORKTREE:-$HOME/pioneer-agent} --from ${PAG_PRODUCT:-$HOME/pioneer} --base ${PAG_BASE:-main}",
     "doctor": "node bin/doctor.mjs --repo ${PAG_PRODUCT:-$HOME/pioneer}",
     "dry": "node bin/ci.mjs --repo ${PAG_WORKTREE:-$HOME/pioneer-agent} --base ${PAG_BASE:-main} --dry-run",
-    "live": "node bin/ci.mjs --repo ${PAG_WORKTREE:-$HOME/pioneer-agent} --base ${PAG_BASE:-main}",
+    "live": "node bin/live.mjs",
     "jira": "node bin/jira-transition.mjs",
     "backend": "node bin/backend.mjs",
     "app": "node bin/app.mjs",

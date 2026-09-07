@@ -183,6 +183,28 @@ export function repairJson(body) {
  * Now: a truncated answer retries with a much larger budget, a malformed one retries once as
  * before, and the final error says which of the two it was.
  */
+/**
+ * The first complete JSON value in a reply, whatever surrounds it. Haiku answered locate on
+ * ESI2-3194 with a valid object, a closing fence, and three paragraphs explaining its empty picks;
+ * "Unexpected non-whitespace character after JSON" killed the run over prose the prompt had
+ * forbidden. String-aware brace matching, so a `}` inside a quoted value does not end the scan.
+ */
+export function extractJson(text) {
+  const s = String(text)
+  const start = s.search(/[{[]/)
+  if (start === -1) return s.trim()
+  const open = s[start], close = open === '{' ? '}' : ']'
+  let depth = 0, inStr = false, esc = false
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i]
+    if (inStr) { if (esc) esc = false; else if (ch === '\\') esc = true; else if (ch === '"') inStr = false; continue }
+    if (ch === '"') inStr = true
+    else if (ch === '{' || ch === '[') depth++
+    else if (ch === '}' || ch === ']') { depth--; if (depth === 0 && ch === close) return s.slice(start, i + 1) }
+  }
+  return s.slice(start).trim()   // unbalanced: truncated — leave it to the truncation path
+}
+
 export async function converseJson({ model, system, user, maxTokens = 4096, images = [] }) {
   const sys = `${system}\n\nRespond with ONLY a single JSON object. No prose, no markdown fence.`
   const CEILING = Number(process.env.PAG_JSON_MAX_TOKENS || 16384)
@@ -191,7 +213,8 @@ export async function converseJson({ model, system, user, maxTokens = 4096, imag
 
   for (let attempt = 0; attempt < 3; attempt++) {
     const { text, inTok, outTok, stopReason } = await converse({ model, system: sys, user: user + note, maxTokens: budget, images })
-    const body = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
+    const stripped = text.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
+    const body = extractJson(stripped)
     try {
       return { data: JSON.parse(body), inTok, outTok }
     } catch (err) {

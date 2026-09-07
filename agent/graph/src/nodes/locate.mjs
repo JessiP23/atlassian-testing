@@ -107,6 +107,35 @@ export function ticketPhrases(text) {
     .slice(0, 12)
 }
 
+/**
+ * Code the reporter named: camelCase / PascalCase identifiers and file names. A stack trace or an
+ * engineer's comment ("TypeError … in resolveTriggerRelationColumn", "relationSourceField is
+ * undefined") is the strongest locator a ticket can carry — and on ESI2-3194 it was in the ticket
+ * while every candidate came from UI labels, so the automation handler never made the list.
+ */
+export function ticketIdentifiers(text) {
+  const t = String(text)
+  const out = new Set()
+  for (const m of t.matchAll(/\b[a-z]+(?:[A-Z][a-z0-9]+)+\b/g)) out.add(m[0])              // camelCase
+  for (const m of t.matchAll(/\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b/g)) out.add(m[0])      // PascalCase
+  for (const m of t.matchAll(/\b[\w.-]+\.(?:[cm]?[tj]sx?)\b/g)) out.add(m[0])                // file names
+  const noise = /^(TypeError|ReferenceError|JavaScript|TypeScript|GraphQL|AppSync|DynamoDB|OpenSearch|CloudWatch|AssetPanda|LinkedIn|README)$/
+  return [...out].filter((w) => w.length >= 8 && !noise.test(w)).slice(0, 40)
+}
+
+/** Files that define or are named by one of those identifiers — exports, symbols, or the file name itself. */
+function codeSeeds(files, idents) {
+  if (!idents.length) return []
+  const hits = []
+  for (const f of files) {
+    const base = f.path.split('/').pop()
+    const defined = new Set([...(f.exports || []), ...(f.symbols || [])])
+    const matched = idents.filter((id) => id === base || id === base.replace(/\.[cm]?[tj]sx?$/, '') || defined.has(id))
+    if (matched.length) hits.push({ path: f.path, exports: f.exports || [], score: 0, why: `defines ${matched.map((m) => `\`${m}\``).join(', ')}`, matched: matched.length })
+  }
+  return hits.sort((a, b) => b.matched - a.matched)
+}
+
 /** Files whose visible text contains one of those phrases. The strongest seed there is. */
 function phraseSeeds(files, phrases) {
   if (!phrases.length) return []
@@ -176,9 +205,12 @@ export function locateNode({ budget, onProgress = () => {} }) {
 
     // 1. phrases the reporter read on screen — ahead of the lexical score, because an exact label
     //    match is stronger evidence than a term overlap.
+    const ticketText = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, s.ticket?.description || '', ...(s.ticket?.comments || []).map((c) => c.body || '')].join(' ')
+    const code = codeSeeds(index.files, ticketIdentifiers(ticketText))
     const phrases = ticketPhrases([s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, s.ticket?.description || ''].join(' '))
-    const seeds = phraseSeeds(index.files, phrases)
+    const seeds = [...code, ...phraseSeeds(index.files, phrases)]
     let candidates = dedupe([...seeds, ...routed]).slice(0, CANDIDATE_K)
+    if (code.length) onProgress?.(`code seeds: ${code.slice(0, 3).map((x) => `${x.path.split('/').pop()} (${x.why})`).join('; ')}`)
 
     // 3. one hop from those seeds when the list is thin — a cause is usually one import away.
     if (candidates.length < MIN_CANDIDATES && candidates.length) {
