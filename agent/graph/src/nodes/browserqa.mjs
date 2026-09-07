@@ -46,8 +46,11 @@ const PROMPT = (s, { appUrl, outDir, resultFile, ticketShots, routes, minutes, m
 which the local app at ${appUrl} does NOT run — it calls the deployed qa backend, where this fix is not deployed.
 So you CANNOT see the fix, and you must not claim to. Your job: REPRODUCE the ticket on qa as it is TODAY and
 record what actually happens — that is the "before" a reviewer needs next to the diff.
-1. Look for the ticket's scenario by its own names first (its automation names, field names, option values —
-   e.g. an automation called exactly what the ticket calls it). A human may have built it for you. If it exists,
+1. Look for the ticket's scenario by its own names first. The customer's ACCOUNT and MODULE names will never
+   exist here — do not conclude anything from their absence. Search by the AUTOMATION name and FIELD names the
+   ticket uses: Settings → Account management → for each module of the account you are in (start with the one
+   the thread notes name, then the rest), open its Automations list and read the names; a People/Assets pair with
+   the ticket's fields is the other tell. A human may have built it for you. If it exists,
    correct nothing unless it plainly differs from the ticket's configuration (screenshot before and after the
    edit), then RUN the ticket's steps end to end: make the triggering change, \`browser_wait_for\` ~10s, re-open
    the records, and screenshot the outcome — the field that should have changed, and the Activity tab showing
@@ -91,6 +94,10 @@ ${(s.spec.acceptanceCriteria || []).map((a, i) => `${i + 1}. ${a}`).join('\n')}
 
 Steps to reproduce, from the ticket:
 ${(s.ticket?.description || '').slice(0, 3000)}
+${(s.ticket?.comments || []).length ? `
+Newest notes on the ticket thread (a human may say WHERE on this environment the test data was built — account,
+module, record names. If they do, go straight there):
+${s.ticket.comments.slice(-3).map((c) => `- ${c.author}: ${String(c.body || '').replace(/\s+/g, ' ').slice(0, 700)}`).join('\n')}` : ''}
 ${ticketShots.length ? `
 ## The reporter's screenshots — LOOK at them first
 ${ticketShots.map((t) => `- ${t}`).join('\n')}
