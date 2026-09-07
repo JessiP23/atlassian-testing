@@ -146,6 +146,14 @@ export function planNode({ budget, onProgress = () => {} }) {
     if (esc?.neededFiles?.length && !esc.neededFiles.every((f) => data.impactedFiles.includes(f))) {
       data.impactedFiles = [...new Set([...esc.neededFiles, ...data.impactedFiles])]
     }
+    // And a re-plan must not FORGET the first plan either: on ESI2-3194 the first plan targeted the
+    // TypeError in the automation handler, patch escalated for the changeType files the red test
+    // needed, and the re-plan returned only those — the second defect silently fell out of the run.
+    // Both halves stay in scope; the width cap below still applies.
+    if (esc && s.plan?.impactedFiles?.length) {
+      const prev = s.plan.impactedFiles.filter((f) => fs.existsSync(path.join(s.repo, f)))
+      data.impactedFiles = [...new Set([...data.impactedFiles, ...prev])]
+    }
 
     if (data.impactedFiles.length > DIFF_LIMITS.maxFiles) {
       return { plan: data, refusal: { at: 'plan', reason: 'plan_too_wide', detail: `${data.impactedFiles.length} production files exceeds the ${DIFF_LIMITS.maxFiles} cap — the root cause was not isolated` } }

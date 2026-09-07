@@ -185,8 +185,21 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
     // TypeError in its own mocks. Two runs, same base, opposite quality — pure variance. A red spec
     // that still fails on this tree is a fact about the code, not about the run that wrote it, so
     // reuse it: newest first, re-run here, and take the first that is red for an assertion reason.
+    // …but only a spec that exercises what THIS plan targets. On ESI2-3194 r9 the plan targeted the
+    // TypeError in the automation handler, the reused spec pinned the changeType path in
+    // libs/collection, and patch had no way to make that test green inside the plan's files — it
+    // escalated, and the re-plan swapped the second defect out for the first. A prior spec must
+    // import, or sit beside, one of the impacted files; otherwise it is a different bug's test.
+    const stems = (s.plan?.impactedFiles || []).map((f) => f.replace(/\.[tj]sx?$/, ''))
+    const exercises = (prior) => {
+      const dir = path.dirname(prior.file)
+      if (stems.some((st) => path.dirname(st) === dir)) return true
+      const specs = [...String(prior.src).matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1])
+      return specs.some((sp) => stems.some((st) => st.endsWith(sp.replace(/^(\.\.?\/)+/, '').replace(/\.[tj]sx?$/, '')) || path.basename(st) === path.basename(sp)))
+    }
     for (const prior of priorRedSpecs(s.issueKey)) {
       if (prior.file !== specFile && !fs.existsSync(path.dirname(path.join(s.repo, prior.file)))) continue
+      if (!exercises(prior)) { onProgress(`earlier repro from ${prior.run} (${path.basename(prior.file)}) tests none of the plan's files — not reusing it`); continue }
       const dest = prior.file
       fs.writeFileSync(path.join(s.repo, dest), prior.src)
       const red = await runSpec(s.repo, dest)

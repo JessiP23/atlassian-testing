@@ -62,6 +62,24 @@ export function commentLines(comments, max = 10, chars = 2000) {
   return [...comments.slice(0, 2).map(line), `(… ${tail - 2} older comment(s) omitted …)`, ...comments.slice(tail).map((c, k) => line(c, tail + k))]
 }
 
+/** PRs (#NNNN) mentioned in `text` that GitHub says are not merged, as { number, state }. Silent on any failure — this is a check, never a blocker. */
+export async function unmergedPrs(text) {
+  const slug = (process.env.PAG_ALLOWED_REMOTE || '').trim()
+  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
+  const nums = [...new Set([...String(text).matchAll(/#(\d{3,6})\b/g)].map((m) => m[1]))].slice(0, 5)
+  if (!slug || !token || !nums.length) return []
+  const out = []
+  for (const n of nums) {
+    try {
+      const r = await fetch(`https://api.github.com/repos/${slug}/pulls/${n}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(10_000) })
+      if (!r.ok) continue
+      const pr = await r.json()
+      if (!pr.merged) out.push({ number: n, state: pr.draft ? 'draft' : pr.state })
+    } catch { /* offline or no access: say nothing */ }
+  }
+  return out
+}
+
 export function intakeNode({ budget }) {
   return async (s) => {
     const tier = tierFor('intake')
@@ -130,6 +148,18 @@ export function intakeNode({ budget }) {
     // A re-open is CONTEXT, not a stop. A human pointed the agent at this ticket on purpose; the
     // prior fix and the "still failing" report are the most valuable facts in the thread, and the
     // plan gets them (see plan.mjs) so the work is "what did the shipped fix miss", never a redo.
+    // The model reads "PR #15846 opened" and writes "merged and deployed" — it did on ESI2-3194, and
+    // the plan then fixed only the NEW finding, leaving the unmerged half off main. Merge state is a
+    // fact GitHub knows, not something to infer from a thread: check every PR the prior fix names.
+    if (data.reopened && data.priorFix) {
+      const unmerged = await unmergedPrs(data.priorFix)
+      if (unmerged.length) {
+        data.riskNotes = [...(data.riskNotes || []), `${unmerged.map((u) => `PR #${u.number}`).join(', ')} named as the prior fix ${unmerged.length > 1 ? 'are' : 'is'} ${unmerged.map((u) => u.state).join('/')} — NOT merged, so that change is not on the base branch. The fix here must include it, not assume it.`]
+        data.priorFix = `${data.priorFix} (${unmerged.map((u) => `#${u.number} ${u.state}, not merged`).join('; ')})`
+        data.reopened = false
+        console.error(`      prior fix named ${unmerged.map((u) => `#${u.number}`).join(', ')} — GitHub says ${unmerged.map((u) => u.state).join('/')}, not merged; treating the ticket as OPEN, both halves in scope`)
+      }
+    }
     if (data.reopened) console.error(`      re-open: ${data.priorFix || 'a prior fix'} shipped and the customer still reports it — planning around what it missed`)
 
     // Low confidence is a WARNING unless the ticket really gives nothing to reproduce.
