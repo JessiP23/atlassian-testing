@@ -62,19 +62,30 @@ export function commentLines(comments, max = 10, chars = 2000) {
   return [...comments.slice(0, 2).map(line), `(… ${tail - 2} older comment(s) omitted …)`, ...comments.slice(tail).map((c, k) => line(c, tail + k))]
 }
 
-/** PRs (#NNNN) mentioned in `text` that GitHub says are not merged, as { number, state }. Silent on any failure — this is a check, never a blocker. */
+/**
+ * PRs (#NNNN) mentioned in `text` that GitHub says are not merged, each with the product files it
+ * changes and its diff (product hunks only, capped). Silent on any failure — a check, never a blocker.
+ * Used to CARRY an unmerged prior fix into this run: a draft PR is not on the base branch, so a
+ * "re-open" of it is really a ticket with two defects, and the plan must cover both.
+ */
 export async function unmergedPrs(text) {
   const slug = (process.env.PAG_ALLOWED_REMOTE || '').trim()
   const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
   const nums = [...new Set([...String(text).matchAll(/#(\d{3,6})\b/g)].map((m) => m[1]))].slice(0, 5)
   if (!slug || !token || !nums.length) return []
+  const { isTestFile } = await import('../lib/guard.mjs')
+  const gh = (p, accept = 'application/vnd.github+json') => fetch(`https://api.github.com/repos/${slug}/pulls/${p}`, { headers: { authorization: `Bearer ${token}`, accept }, signal: AbortSignal.timeout(15_000) })
   const out = []
   for (const n of nums) {
     try {
-      const r = await fetch(`https://api.github.com/repos/${slug}/pulls/${n}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(10_000) })
+      const r = await gh(n)
       if (!r.ok) continue
       const pr = await r.json()
-      if (!pr.merged) out.push({ number: n, state: pr.draft ? 'draft' : pr.state })
+      if (pr.merged) continue
+      const files = await gh(`${n}/files?per_page=100`).then((x) => (x.ok ? x.json() : [])).then((fs_) => fs_.map((f) => f.filename).filter((f) => !isTestFile(f))).catch(() => [])
+      const diff = await gh(n, 'application/vnd.github.diff').then((x) => (x.ok ? x.text() : '')).catch(() => '')
+      const hunks = diff.split(/^(?=diff --git )/m).filter((h) => h.trim() && !isTestFile(h.split('\n')[0].replace(/^.*?\bb\//, '').trim()))
+      out.push({ number: n, state: pr.draft ? 'draft' : pr.state, title: pr.title, files, diff: hunks.join('').slice(0, 12_000) })
     } catch { /* offline or no access: say nothing */ }
   }
   return out
@@ -157,6 +168,8 @@ export function intakeNode({ budget }) {
         data.riskNotes = [...(data.riskNotes || []), `${unmerged.map((u) => `PR #${u.number}`).join(', ')} named as the prior fix ${unmerged.length > 1 ? 'are' : 'is'} ${unmerged.map((u) => u.state).join('/')} — NOT merged, so that change is not on the base branch. The fix here must include it, not assume it.`]
         data.priorFix = `${data.priorFix} (${unmerged.map((u) => `#${u.number} ${u.state}, not merged`).join('; ')})`
         data.reopened = false
+        data.carry = unmerged
+        for (const u of unmerged) if (u.diff) saveEvidence(`prior-pr-${u.number}.diff`, u.diff)
         console.error(`      prior fix named ${unmerged.map((u) => `#${u.number}`).join(', ')} — GitHub says ${unmerged.map((u) => u.state).join('/')}, not merged; treating the ticket as OPEN, both halves in scope`)
       }
     }

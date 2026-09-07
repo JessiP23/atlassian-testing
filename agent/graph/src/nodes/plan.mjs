@@ -70,6 +70,11 @@ export function planNode({ budget, onProgress = () => {} }) {
           + ' Every file in impactedFiles must be on the code path that produces THAT screen for THOSE values.'
           + ' If none of the candidates is, set needsEscalation and say which layer the fix must live in.'
         : '',
+      (s.spec.carry || []).length
+        ? `UNMERGED PRIOR FIX — carry it: ${s.spec.carry.map((c) => `PR #${c.number} (${c.state}) "${c.title}" changed ${c.files.join(', ') || 'no product files'}`).join('; ')}.`
+          + ' That change is NOT on the base branch, so this ticket has TWO defects: the one that PR addressed and the one the'
+          + ' customer reported afterwards. impactedFiles must cover both — include the files above AND the path the later report names.'
+        : '',
       s.spec.reopened
         ? `RE-OPEN: a fix already shipped (${s.spec.priorFix || 'see the ticket comments'}) and the customer still reports the failure.`
           + ' Do NOT redo that fix. Find the path it did not cover — the customer\'s actual trigger source, data shape or'
@@ -150,6 +155,10 @@ export function planNode({ budget, onProgress = () => {} }) {
     // TypeError in the automation handler, patch escalated for the changeType files the red test
     // needed, and the re-plan returned only those — the second defect silently fell out of the run.
     // Both halves stay in scope; the width cap below still applies.
+    // An unmerged prior fix travels with the ticket: its product files are in scope whatever the
+    // model picked (r10 on ESI2-3194 read the risk note and still planned only the new defect).
+    const carried = (s.spec?.carry || []).flatMap((c) => c.files).filter((f) => fs.existsSync(path.join(s.repo, f)) && !data.impactedFiles.includes(f))
+    if (carried.length) { data.impactedFiles = [...data.impactedFiles, ...carried]; onProgress?.(`carrying ${carried.length} file(s) from the unmerged prior fix: ${carried.map((f) => path.basename(f)).join(', ')}`) }
     if (esc && s.plan?.impactedFiles?.length) {
       const prev = s.plan.impactedFiles.filter((f) => fs.existsSync(path.join(s.repo, f)))
       data.impactedFiles = [...new Set([...data.impactedFiles, ...prev])]

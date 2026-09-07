@@ -44,11 +44,22 @@ function appRoutes(profile) {
 
 const PROMPT = (s, { appUrl, outDir, resultFile, ticketShots, routes, minutes, mode = 'verify' }) => `${mode === 'observe' ? `You are doing BROWSER QA for ${s.issueKey} in OBSERVE mode. The fix is in the BACKEND (${(s.changed || []).filter((f) => !/test/.test(f)).slice(0, 3).join(', ')}),
 which the local app at ${appUrl} does NOT run — it calls the deployed qa backend, where this fix is not deployed.
-So you CANNOT see the fix, and you must not claim to. Your job: walk the ticket's steps on qa exactly as a
-reviewer would, and capture the screens this change affects as they are TODAY — the automation's configuration,
-the record the ticket names (or the closest one you can find), the field that should change, the Linked Records
-view. Caption each screenshot as what it shows today. That gives the reviewer the real UI next to the diff.
-\`status\` must be \`observed\`. You are NOT writing tests and you do NOT edit code.` : `You are doing BROWSER QA for ${s.issueKey}: confirm, in a real browser, that the bug the ticket reports
+So you CANNOT see the fix, and you must not claim to. Your job: REPRODUCE the ticket on qa as it is TODAY and
+record what actually happens — that is the "before" a reviewer needs next to the diff.
+1. Look for the ticket's scenario by its own names first (its automation names, field names, option values —
+   e.g. an automation called exactly what the ticket calls it). A human may have built it for you. If it exists,
+   correct nothing unless it plainly differs from the ticket's configuration (screenshot before and after the
+   edit), then RUN the ticket's steps end to end: make the triggering change, \`browser_wait_for\` ~10s, re-open
+   the records, and screenshot the outcome — the field that should have changed, and the Activity tab showing
+   who changed what. If the outcome matches the ticket's complaint, say so: "reproduced on qa today". If the
+   chain actually completes on qa, say THAT plainly — it is a finding, not a failure of yours.
+2. If the scenario does not exist, build it — but ONLY inside the module named "Panda Agent QA" (create that
+   module under the account you are in if it is missing). Never add fields, records or automations to any other
+   module: qa is shared with the whole team. Use the ticket's exact names, create the minimum (collections,
+   fields, two or three records, the automations), then run step 1.
+3. Never delete or rename anything, anywhere.
+Caption each screenshot as what it shows today. \`status\` must be \`observed\` (a reproduction on the unpatched
+backend proves the bug, never the fix). You are NOT writing tests and you do NOT edit code.` : `You are doing BROWSER QA for ${s.issueKey}: confirm, in a real browser, that the bug the ticket reports
 is gone on the FIXED app, and capture screenshots that prove it. The fix is already applied and the local
 dev server at ${appUrl} is serving it (Vite HMR — the code you see running is the patched code).${s.backend?.status === 'deployed' ? `
 The BACKEND is a private deploy of this branch too (version ${s.backend.versionId}), and the org you are signed into is the agent's own QA org, which PERSISTS across tickets: look at what already exists (collections, fields, records, automations, roles) and reuse it; create only what the ticket's steps still need; never delete or rename anything that exists — another ticket may depend on it. If an existing automation, field or record is configured differently from what the ticket describes, open it and correct it TO the ticket's configuration (a screenshot before and after the edit) — never the other way round: never loosen the configuration the ticket names (e.g. a trigger's By, a role's permission) to make the steps pass; if it only passes that way, that is status bugs_unresolved. Then run the steps. Backend behaviour you trigger — automations, permissions, record writes — runs the fixed code.` : ''} You are NOT

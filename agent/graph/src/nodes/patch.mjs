@@ -126,6 +126,25 @@ create or switch branches — the workflow owns git. Leave everything uncommitte
  * from nothing and shipped logging. A diff is evidence about the code — judge it, do not redo it.
  */
 function ctxPrior(s) {
+  return ctxCarry(s) + ctxPriorRun(s)
+}
+
+// A prior fix that is a draft PR is not on the base: the reviewer will merge THIS PR, so this diff
+// has to be in it. Reapply it (the files are in the allowed list), then fix the later defect on top.
+function ctxCarry(s) {
+  const carry = (s.spec?.carry || []).filter((c) => c.diff)
+  if (!carry.length) return ''
+  return carry.map((c) => `
+## PR #${c.number} ("${c.title}") is ${c.state} and NOT merged — its change must be part of this fix
+It addressed the first defect on this ticket; the customer's later report is a second one. Reapply
+this change (adapted to the current tree, no need to be byte-identical), then fix the second defect.
+\`\`\`diff
+${c.diff}
+\`\`\`
+`).join('')
+}
+
+function ctxPriorRun(s) {
   const runDir = process.env.PAG_RUN_DIR
   if (!runDir) return ''
   const parent = path.dirname(path.resolve(runDir))
