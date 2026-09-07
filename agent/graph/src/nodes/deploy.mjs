@@ -55,6 +55,21 @@ const BENIGN = new Set(['lambdas-fns-collection-filter-ai-processor', 'lambdas-f
 export const AGENT_VERSION_ID = '238f0e42'
 export const versionIdFor = () => AGENT_VERSION_ID
 
+// The live registry the app's own Env Switcher reads. Every deployed version (qa, demo, developer
+// versions, the agent backend after its version:upsert) is listed with its Cognito pool, which is
+// how `.env`'s VITE_APP_AWS_* lines are traced back to the version they came from.
+export const REGISTRY = 'https://preview.api.developerpanda.org'
+export async function registryEntries() {
+  try { return (await fetch(REGISTRY, { signal: AbortSignal.timeout(15_000) }).then((r) => r.json())).apis || [] } catch { return null }
+}
+// The registry entry whose Cognito pool the app is pointed at (`npm run backend`), or null when the
+// registry is unreachable or does not list that pool.
+export async function backendOf(userPoolId) {
+  if (!userPoolId) return null
+  const apis = await registryEntries()
+  return apis?.find((a) => a.userPoolId === userPoolId) || null
+}
+
 /** KEY=value lines → object. Comments and blanks skipped; values never logged by callers. */
 export function parseDotenv(text) {
   const out = {}
@@ -153,6 +168,14 @@ export function deployNode({ budget, onProgress = () => {} }) {
     const backend = (s.changed || []).filter((f) => !profile.isUi?.(f) && !isTestFile(f) && /^packages\/(lambdas|libs|apis|shared)\//.test(f))
     if (!backend.length) return skip('no backend files changed — the dev server already runs the fix')
 
+    // QA screenshots whatever backend graph/.env points the app at. A deploy only helps when that is
+    // the agent's own version; pointed at a shared backend (qa, released by the company account) the
+    // fix cannot be deployed from here, and QA falls back to observe mode — honest screens, not proof.
+    const target = await backendOf(process.env.VITE_APP_AWS_COGNITO_USER_POOL_ID)
+    if (target && target.versionId !== versionIdFor(s.issueKey)) {
+      return skip(`the app points at the shared backend "${target.branch}" released by ${target.developer} (version ${target.versionId}) — nothing can be deployed there from here, so QA runs in observe mode; \`npm run backend agent\` switches to the agent backend, where deploys land`)
+    }
+
     // The product checkout the worktree was made from holds the deploy env developers export by hand.
     let productDir
     try { productDir = path.dirname(path.resolve(s.repo, (await exec('git', ['rev-parse', '--git-common-dir'], { cwd: s.repo })).stdout.trim())) } catch { productDir = null }
@@ -201,7 +224,12 @@ export function deployNode({ budget, onProgress = () => {} }) {
     //
     // Byte-identical patch already on the backend → nothing to push. Reruns of the same ticket (five of
     // them on ESI2-3194 today) spent 19 min each re-deploying 126 Lambdas that had not changed.
-    const diffText = fs.existsSync(path.join(process.env.PAG_RUN_DIR || '', 'patch.diff')) ? fs.readFileSync(path.join(process.env.PAG_RUN_DIR, 'patch.diff'), 'utf8') : ''
+    // Hash the PRODUCT hunks only: tests are rewritten from scratch every run and never deploy,
+    // and hashing them made every rerun look new (r7 pushed 126 unchanged Lambdas for 21 min).
+    const rawDiff = fs.existsSync(path.join(process.env.PAG_RUN_DIR || '', 'patch.diff')) ? fs.readFileSync(path.join(process.env.PAG_RUN_DIR, 'patch.diff'), 'utf8') : ''
+    const diffText = rawDiff.split(/^(?=diff --git |\n?--- NEW FILE: )/m)
+      .filter((h) => h.trim() && !isTestFile(h.split('\n')[0].replace(/^.*?\bb\//, '').replace(/^--- NEW FILE: /, '').trim()) && !/\/tests?\/|__tests__\//.test(h.split('\n')[0]))
+      .join('')
     const diffSha = crypto.createHash('sha256').update(diffText).digest('hex').slice(0, 16)
     const marker = path.join(GRAPH_DIR, '.pag', 'deploy', `${versionId}.deployed.json`)
     let already = null

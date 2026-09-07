@@ -185,7 +185,9 @@ console.log(`  base ${baseBranch}@${baseSha.slice(0, 7)}  ->  PR into ${prTarget
 console.log(`  cap $${budget.capUsd} (reserve $${budget.reserveUsd}) · hard deadline ${budget.maxMinutes} min`)
 console.log(`  clock: repro ${(budget.timeFor('reproduce') / 1000).toFixed(0)}s · patch ${(budget.timeFor('patch') / 1000).toFixed(0)}s · verify ${(budget.timeFor('verify') / 1000).toFixed(0)}s, and publish is always reserved`)
 console.log(`  models: fast=${TIERS.fast.model}  heavy=${TIERS.heavy.model}`)
-console.log(`  backend deploy: ${process.env.PAG_UI_EVIDENCE === '1' ? 'on — a backend fix is deployed to a private per-ticket version before QA (first time per ticket ~35 min, then Lambdas only)' : 'off (PAG_UI_EVIDENCE)'}`)
+const backendLine = fs.existsSync(path.join(path.dirname(import.meta.dirname), '.env')) ? fs.readFileSync(path.join(path.dirname(import.meta.dirname), '.env'), 'utf8').split('\n').find((l) => l.startsWith('# backend:'))?.replace(/^# backend: /, '').replace(/, from .*$/, '') : null
+console.log(`  app backend:    ${backendLine || (process.env.VITE_APP_AWS_COGNITO_USER_POOL_ID ? `pool ${process.env.VITE_APP_AWS_COGNITO_USER_POOL_ID}` : 'none — run `npm run backend`')}`)
+console.log(`  backend deploy: ${process.env.PAG_UI_EVIDENCE === '1' ? 'on when the app backend is the agent backend (`npm run backend agent`, Lambdas only after the first time); on a shared backend backend fixes are QA\'d in observe mode' : 'off (PAG_UI_EVIDENCE)'}`)
 console.log(`  browser QA: ${process.env.PAG_UI_EVIDENCE !== '1' ? 'off (PAG_UI_EVIDENCE)' : /[<>]/.test(process.env.PAG_APP_PASSWORD || '') || !process.env.PAG_APP_PASSWORD ? 'off — no real PAG_APP_EMAIL/PASSWORD' : `on, after the gate, up to ${process.env.PAG_QA_MINUTES || 20} min, as ${process.env.PAG_APP_EMAIL}`}`)
 console.log('')
 

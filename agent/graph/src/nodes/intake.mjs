@@ -52,6 +52,16 @@ Return JSON:
  "reopened":bool,"priorFix":str,
  "riskNotes":[str],"testPlan":[str],"confidence":"high"|"medium"|"low"}`
 
+// The comments the model reads, as prompt lines: the first two (how the ticket was raised) and the
+// newest ones, with an explicit gap line so a skipped run of comments is visible rather than silent.
+// Numbering follows the ticket so a reference like "comment [9]" means the same thing to everyone.
+export function commentLines(comments, max = 10, chars = 2000) {
+  const line = (c, i) => `[${i + 1}] ${c.author}: ${String(c.body || '').slice(0, chars)}`
+  if (comments.length <= max) return comments.map(line)
+  const tail = comments.length - (max - 2)
+  return [...comments.slice(0, 2).map(line), `(… ${tail - 2} older comment(s) omitted …)`, ...comments.slice(tail).map((c, k) => line(c, tail + k))]
+}
+
 export function intakeNode({ budget }) {
   return async (s) => {
     const tier = tierFor('intake')
@@ -97,8 +107,12 @@ export function intakeNode({ budget }) {
       'DESCRIPTION:',
       (ticket.description || '(none)').slice(0, 6000),
       '',
-      'COMMENTS:',
-      ...(ticket.comments || []).slice(0, 8).map((c, i) => `[${i + 1}] ${c.author}: ${c.body.slice(0, 1500)}`),
+      // Newest comments carry the most: on a re-opened ticket the finding that explains why the last
+      // fix did not hold is the LAST comment, and `slice(0, 8)` cut exactly that one off ESI2-3194
+      // (a CloudWatch stack trace in comment 9 of 9). Keep the first two for the original context
+      // and the newest for the rest; the model sees the gap when one exists.
+      'COMMENTS (oldest first; numbering follows the ticket):',
+      ...commentLines(ticket.comments || []),
       ...(ticket.comments || []).length ? [] : ['(no human comments on this ticket)'],
       '',
       images.length

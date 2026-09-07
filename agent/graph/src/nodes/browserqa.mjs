@@ -120,6 +120,11 @@ user's role, never touch account or organisation settings beyond what the ticket
 3. Follow the ticket's steps exactly. At each state the ticket describes, \`browser_take_screenshot\` with
    filename \`NN-slug.png\` (01, 02, …) and add it to \`steps\` with a caption in the ticket's words. Let the
    page settle first — no spinners mid-frame, scroll the relevant UI into view, dismiss stale toasts.
+   Do NOT Read your own screenshots back — you already know what is on the page from the snapshot, and
+   every image you read costs more than the whole step. Read at most the final screenshot, once, to
+   confirm it shows the acceptance criterion. Trust \`browser_snapshot\` text for everything else.
+   After an action that triggers backend work (an automation, a save that fans out), \`browser_wait_for\`
+   ~10s, then re-navigate to the record and snapshot — do not spend turns polling.
 4. The last screenshot must show the acceptance criterion satisfied — or NOT satisfied, honestly.
 5. Check the immediately surrounding behaviour once (same screen, adjacent action) so a regression is caught.
 6. Set the final \`status\` and \`summary\`. Stop video/tracing if you started them.
