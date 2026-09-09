@@ -77,7 +77,7 @@ Drive by SNAPSHOT, not by pixels: \`browser_snapshot\` gives you the live access
 names). Snapshot before you click, snapshot after to confirm the state changed. A SPA action resolves
 asynchronously — \`browser_wait_for\` the expected text instead of assuming it worked.
 RECORDING IS MANDATORY. Your first browser call is \`browser_start_video\` with
-{"filename":"qa.webm","size":{"width":1440,"height":900}} (load it with the other tools via ToolSearch:
+{"filename":"${outDir}/qa.webm","size":{"width":1440,"height":900}} (load it with the other tools via ToolSearch:
 \`select:mcp__playwright__browser_start_video,mcp__playwright__browser_stop_video,mcp__playwright__browser_close,…\`).
 Your last two calls are \`browser_stop_video\` then \`browser_close\`. A run without qa.webm is a defective run.
 If the browser is NOT signed in (a login form appears), that is a pipeline fault, not yours to fix: take one
@@ -139,7 +139,7 @@ user's role, never touch account or organisation settings beyond what the ticket
 2. Navigate to the screen the ticket names, by route where you can. Snapshot. If data setup is needed, do it
    now and sign in as the right user.
 3. Follow the ticket's steps exactly. At each state the ticket describes, \`browser_take_screenshot\` with
-   filename \`NN-slug.png\` (01, 02, …) and add it to \`steps\` with a caption in the ticket's words. Let the
+   filename \`${outDir}/NN-slug.png\` (01, 02, … — the ABSOLUTE path, a bare name lands in the wrong folder) and add it to \`steps\` with a caption in the ticket's words. Let the
    page settle first — no spinners mid-frame, scroll the relevant UI into view, dismiss stale toasts.
    Do NOT Read your own screenshots back — you already know what is on the page from the snapshot, and
    every image you read costs more than the whole step. Read at most the final screenshot, once, to
@@ -157,6 +157,21 @@ create, an error page), take a screenshot of where you got stuck, record it in \
 
 Do NOT edit any file under ${s.repo}. Do NOT run git. Do NOT sign out of the admin account until your
 setup is done.`
+
+/** Move screenshots / video / trace the browser session dropped in `cwd` (top level only) into `outDir`. */
+export function sweepSessionFiles(cwd, outDir, since) {
+  let moved = 0
+  try {
+    for (const name of fs.readdirSync(cwd)) {
+      if (!/^\d\d-[\w.-]+\.png$|\.webm$|^trace.*\.zip$/i.test(name)) continue
+      const from = path.join(cwd, name)
+      let st; try { st = fs.statSync(from) } catch { continue }
+      if (!st.isFile() || st.mtimeMs < since) continue
+      fs.renameSync(from, path.join(outDir, name)); moved++
+    }
+  } catch { /* cwd unreadable: nothing to sweep */ }
+  return moved
+}
 
 export function browserQaNode({ budget, onProgress = () => {} }) {
   return async (s) => {
@@ -196,12 +211,19 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
     const minutes = Math.floor(timeMs / 60_000)
     onProgress(`browser QA (${mode}${mode === 'observe' ? ': backend fix, not deployed here — capturing the ticket\'s screens as they are on qa' : ''}): ${minutes} min, signed in as ${process.env.PAG_APP_EMAIL}, ${ticketShots.length} ticket screenshot(s) to read`)
 
+    const sessionStart = Date.now() - 5_000
     const r = await runClaude({
       cwd: s.repo, model: tier.model, budgetUsd: Math.min(QA_BUDGET_USD, budget.availableFor('repro')), timeoutMs: timeMs,
       onProgress, mcpConfig,
       prompt: PROMPT(s, { appUrl: app.url, outDir, resultFile, ticketShots, routes: appRoutes(profile), minutes, mode }),
     })
     budget.charge('qa', r.cost, { model: tier.model, subtype: r.subtype, exit: r.code })
+
+    // @playwright/mcp 0.0.80 writes a RELATIVE screenshot/video filename into the MCP server's cwd
+    // — the worktree — not into --output-dir (3436 r3: six screenshots and qa.webm taken, "0
+    // screenshot(s), video no" collected, and the worktree left dirty). Sweep anything the session
+    // produced there into the output dir before collecting; mtime keeps a stray older file out.
+    sweepSessionFiles(s.repo, outDir, sessionStart)
 
     // Whatever the session managed, collect it. The outcome file is the model's word; the PNGs on
     // disk are the evidence. A screenshot the file does not caption still ships, uncaptioned.
