@@ -30,6 +30,7 @@ import { runClaude } from '../lib/agent.mjs'
 import { reproPathFor, reproCommand, runSpec, sha256, saveEvidence, excerpt } from '../lib/repro.mjs'
 import { parseGateFailures, formatFailures } from '../lib/gatelog.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
+import { isTestFile } from '../lib/guard.mjs'
 
 const exec = promisify(execFile)
 const ATTEMPTS = Number(process.env.PAG_REPRO_ATTEMPTS || 2)
@@ -261,6 +262,19 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
       }
 
       if (!fs.existsSync(path.join(s.repo, specFile))) {
+        // The model traced the path, found the plan's file is a thin dispatcher, and stopped —
+        // naming the real file in prose but not in the `REPRO: wrong-location` line (3436 on CI:
+        // "updateFormSubmit.ts only builds an SQS message", then $1.5 of nothing, then a patch
+        // session with no anchor). Read the prose: a product file it names that is not in the plan
+        // is the escalation it meant to send.
+        const named = [...r.text.matchAll(/\bpackages\/[\w./-]+?\.tsx?\b/g)].map((m) => m[0])
+          .filter((f) => !isTestFile(f) && !(s.plan.impactedFiles || []).includes(f) && fs.existsSync(path.join(s.repo, f)))
+        const counts = named.reduce((m, f) => m.set(f, (m.get(f) || 0) + 1), new Map())
+        const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0]
+        if (best && !/REPRO:\s*none/i.test(r.text)) {
+          onProgress(`repro wrote no test and named ${best} as where the symptom is produced — re-planning there`)
+          return { escalation: { from: 'reproduce', text: r.text, neededFiles: [best] }, refusal: null }
+        }
         const said = (r.text.match(/REPRO:\s*none\s*(.*)/i) || [])[1] || 'no test file was written'
         previous = `Attempt ${attempt} wrote no file. It said: ${said}`
         if (/REPRO:\s*none/i.test(r.text) || r.timedOut) return { repro: { status: 'none', reason: said.trim(), rung, cost: r.cost } }

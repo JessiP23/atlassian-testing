@@ -98,6 +98,10 @@ ${ctxPrior(s)}
 1. The product fix, in the allowed files. 2. Make the reproducing test pass. 3. ONE focused test
 of your own if the plan lists one. 4. \`npx eslint\` on the files you touched. Then stop. Do not
 write more test files than the plan lists — a run died at the deadline writing its third.
+Research is bounded: if after ~15 tool calls you have not made an edit, either edit the most likely
+site or write \`.pag/escalate.txt\` naming the file the fix belongs in and stop — never keep reading.
+Never run a project's whole test suite; run jest ONLY with --testPathPattern on the files you touch
+(one full-suite run on CI ate 14 minutes and the entire patch budget).
 
 ## Standards — the gate enforces lint and types; you are responsible for these
 - Match the neighbouring files in this package: naming, error handling, how they log, how they test.

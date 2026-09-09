@@ -161,6 +161,26 @@ jobs:
       - name: Jira reachability
         run: node agent/graph/bin/jira-probe.mjs "$ISSUE_KEY"
 
+      # The agent's memory of this ticket: earlier runs' red tests are reused for $0, earlier diffs
+      # are handed to patch, unmerged halves are carried. On a laptop that lives in runs/; on a fresh
+      # runner it must come back from S3 or every run starts from zero (3436 on CI: $9.61, no PR,
+      # for a fix the laptop had already found for $0.79).
+      - name: Restore this ticket's run history
+        if: vars.RUNS_BUCKET != ''
+        continue-on-error: true
+        run: |
+          mkdir -p "agent/graph/runs/$ISSUE_KEY"
+          aws s3 sync "s3://${{ vars.RUNS_BUCKET }}/runs/$ISSUE_KEY/" "agent/graph/runs/$ISSUE_KEY/" --only-show-errors --exclude "*/qa/*"
+          echo "restored $(ls agent/graph/runs/$ISSUE_KEY | wc -l) earlier run(s)"
+
+      # The file index only changes when Pioneer does: keyed on its commit, ~1 min saved per run.
+      - name: Cache the file index
+        id: par-cache
+        uses: actions/cache@v4
+        with:
+          path: agent/.par/index.json
+          key: pioneer-par-${{ hashFiles('pioneer/.git/HEAD', 'pioneer/.git/refs/heads/main') }}
+
       - name: Run the agent
         id: agent
         env:
@@ -172,6 +192,7 @@ jobs:
           FLAG=""; [ "$DRY" = "true" ] && FLAG="--dry-run"
           git -C pioneer config user.name  "panda-agent[bot]"
           git -C pioneer config user.email "panda-agent@users.noreply.github.com"
+          [ "${{ steps.par-cache.outputs.cache-hit }}" = "true" ] && FLAG="$FLAG --skip-index"
           node agent/graph/bin/ci.mjs "$ISSUE_KEY" --repo "$PIONEER_DIR" --base main $FLAG
 
       - name: Job summary
