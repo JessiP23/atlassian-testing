@@ -59,12 +59,24 @@ const RULES = [
 /** Files whose long random-looking strings are never credentials: hashes, sprites, fixtures. */
 const IGNORE_FILE = /\.(?:css|scss|sass|less|svg|snap|lock|map|ico|png|jpe?g|webp|woff2?)$|(?:^|\/)(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/
 
+/**
+ * snake_case / kebab-case identifiers clear the entropy bar easily — many distinct letters, digits,
+ * separators — but a key never looks like words joined by underscores. Three or more separated
+ * segments, at least two of them plain words of 3+ letters, is an identifier, not a credential.
+ */
+export function identifierLike(v) {
+  const parts = v.split(/[_-]/)
+  if (parts.length < 3 || !/^[A-Za-z]/.test(v)) return false
+  return parts.filter((p) => /^[A-Za-z]{3,}$/.test(p)).length >= 2
+}
+
 /** High-entropy quoted literal with no other explanation. Last resort, and the noisiest rule. */
 function entropyHit(text) {
   for (const m of text.matchAll(/['"`]([A-Za-z0-9+/_=-]{32,})['"`]/g)) {
     const v = m[1]
     if (!plausible(v)) continue
     if (/^[0-9a-f]+$/i.test(v) && v.length % 8 === 0 && entropy(v) < 3.6) continue  // sha/md5 digest
+    if (identifierLike(v)) continue  // SILO_COL_0_availableslots_num: a column id, refused ESI2-3436 as a "secret"
     if (entropy(v) >= 4.0) return { kind: 'high-entropy-literal', value: v }
   }
   return null

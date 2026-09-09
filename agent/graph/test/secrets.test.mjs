@@ -93,3 +93,9 @@ test('scanText is usable on its own', () => {
   assert.equal(scanText('nothing here'), null)
   assert.equal(scanText("secret: 'a-real-looking-secret-value'").kind, 'assigned-credential')
 })
+
+test('secrets: snake_case column ids are identifiers, not high-entropy literals (ESI2-3436 false refusal)', () => {
+  assert.equal(scanText("const availableSlotsFieldId = 'SILO_COL_0_availableslots_num'", { file: 'x.test.ts' }), null)
+  assert.equal(scanText("const t = 'asset_template_index_template_v1_dev_extra_long'", { file: 'x.ts' }), null)
+  assert.ok(scanText("const k = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'", { file: 'x.ts' }), 'a real-looking key still trips')
+})
