@@ -45,7 +45,12 @@ if (process.env.AWS_PROFILE && !process.env.PAG_SHELL_AWS_PROFILE) process.env.P
 const fileHasStaticKeys = ['.env', '.env.local'].some((n) => {
   try { return /^AWS_ACCESS_KEY_ID=\S/m.test(fs.readFileSync(path.join(GRAPH_DIR, n), 'utf8')) } catch { return false }
 })
-if (fileHasStaticKeys) {
+// In CI the ENVIRONMENT is the source of truth (PAG_ENV_PRECEDENCE=env): the keys are Actions
+// secrets placed there on purpose, and graph/.env holds only the qa backend lines — the laptop
+// rule below read that as "stale shell keys" and deleted the only credentials the job had.
+if (process.env.PAG_ENV_PRECEDENCE === 'env') {
+  // keep everything as given
+} else if (fileHasStaticKeys) {
   for (const k of ['AWS_PROFILE', 'AWS_SESSION_TOKEN', 'AWS_SECURITY_TOKEN']) {
     if (process.env[k]) {
       if (process.env.PAG_QUIET_ENV !== '1') console.error(`  note: ignoring ${k} from your shell — graph/.env supplies static credentials`)
