@@ -1,0 +1,197 @@
+name: Pioneer — ESI ticket to PR (with evidence)
+
+# Jira label -> repository_dispatch -> this job -> two draft PRs on AssetPandaLLC/pioneer.
+#
+# Runs on a GitHub-hosted runner. Nothing is hosted: the patched frontend runs for the length of the
+# job on the runner's own localhost:3000 and talks to the company's qa backend (AppSync + Cognito
+# from the live registry, fetched by `bin/backend.mjs`). Every run folder (prompts, diff, timeline,
+# screenshots, video, metrics row) is kept as an artifact and, when RUNS_BUCKET is set, synced to S3
+# — that S3 prefix is the durable record of every run.
+#
+# Trigger from Jira Automation: WHEN Labels changed -> IF contains PandaAgentGraph -> Send web request
+#   POST https://api.github.com/repos/<this repo>/dispatches
+#   headers: Authorization: Bearer <PAT with repo scope> (hidden) · Accept: application/vnd.github+json
+#   body:    {"event_type":"pioneer-ticket","client_payload":{"issue_key":"{{issue.key}}"}}
+
+on:
+  repository_dispatch:
+    types: [pioneer-ticket]
+  workflow_dispatch:
+    inputs:
+      issue_key:
+        description: Jira issue key (ESI2-…)
+        required: true
+        type: string
+      dry_run:
+        description: Do everything except push the branch and open the PRs
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: pioneer-${{ github.event.client_payload.issue_key || inputs.issue_key }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  ISSUE_KEY: ${{ github.event.client_payload.issue_key || inputs.issue_key }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  CLAUDE_CODE_USE_BEDROCK: '1'
+  PAG_ENV_PRECEDENCE: env
+  PAG_QUIET_ENV: '1'
+  PAG_MODEL_FAST: ${{ vars.BEDROCK_HAIKU_MODEL || 'us.anthropic.claude-haiku-4-5-20251001-v1:0' }}
+  PAG_MODEL_HEAVY: ${{ vars.BEDROCK_OPUS_MODEL || 'us.anthropic.claude-opus-5' }}
+  # The product checkout lives beside the agent; the agent's own state stays under agent/.
+  PIONEER_DIR: ${{ github.workspace }}/pioneer
+  PAG_PROFILE: nx
+  PAG_PAR_DIR: ${{ github.workspace }}/agent/.par
+  PAG_BASELINE_DIR: ${{ github.workspace }}/agent/.baseline
+  PAG_RUNS_DIR: ${{ github.workspace }}/agent/graph/runs
+  # Guards: only this remote, only draft PRs, main + a qa copy.
+  PAG_ALLOWED_REMOTE: AssetPandaLLC/pioneer
+  PAG_BRANCH_PREFIX: agent/
+  PAG_BASE_BRANCH: main
+  PAG_PR_TARGET: main
+  PAG_PR_EXTRA_TARGETS: qa
+  PAG_CAP_USD: ${{ vars.PAG_CAP_USD || '15' }}
+  PAG_RESERVE_USD: ${{ vars.PAG_RESERVE_USD || '2' }}
+  PAG_MAX_MINUTES: ${{ vars.PAG_MAX_MINUTES || '45' }}
+  PAG_PATCH_MINUTES: ${{ vars.PAG_PATCH_MINUTES || '12' }}
+  PAG_JIRA_TRANSITION: ${{ vars.PAG_JIRA_TRANSITION || 'READY FOR REVIEW' }}
+  PAG_UI_EVIDENCE: '1'
+  PAG_APP_URL: http://localhost:3000
+  PAG_APP_EMAIL: ${{ secrets.PAG_APP_EMAIL }}
+  PAG_APP_PASSWORD: ${{ secrets.PAG_APP_PASSWORD }}
+  JIRA_URL: ${{ secrets.JIRA_BASE_URL || vars.JIRA_BASE_URL }}
+  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+
+jobs:
+  agent:
+    name: ${{ github.event.client_payload.issue_key || inputs.issue_key }}
+    if: startsWith(github.event.client_payload.issue_key || inputs.issue_key, 'ESI2-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 75   # backstop: install (~10 min cold) + the agent's own 45-minute clock
+    steps:
+      - name: Checkout the agent
+        uses: actions/checkout@v5
+
+      - name: Checkout pioneer (full history — history mining and baselines read merges)
+        uses: actions/checkout@v5
+        with:
+          repository: AssetPandaLLC/pioneer
+          ref: main
+          path: pioneer
+          fetch-depth: 0
+          token: ${{ secrets.PIONEER_TOKEN }}
+          persist-credentials: true   # the agent pushes agent/* branches with this token
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: pioneer/.nvmrc
+          cache: npm
+          cache-dependency-path: |
+            pioneer/package-lock.json
+            agent/graph/package-lock.json
+
+      # 2.2 GB of node_modules: cached on the lockfile so a warm run restores in ~1 min instead of
+      # a 10-minute npm ci. First run per lockfile pays the install.
+      - name: Cache pioneer node_modules
+        id: nm-cache
+        uses: actions/cache@v4
+        with:
+          path: pioneer/node_modules
+          key: pioneer-nm-${{ runner.os }}-${{ hashFiles('pioneer/package-lock.json') }}
+
+      - name: Cache the Playwright browser
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('agent/graph/package-lock.json') }}
+
+      - name: Install (pioneer deps, agent deps, Claude Code, ffmpeg — concurrently)
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.nm-cache.outputs.cache-hit }}" != "true" ]; then
+            (cd pioneer && npm ci --no-audit --no-fund --prefer-offline) & A=$!
+          fi
+          npm --prefix agent/graph ci --no-audit --no-fund --prefer-offline & B=$!
+          npm install -g @anthropic-ai/claude-code@${{ vars.CLAUDE_CODE_VERSION || 'latest' }} & C=$!
+          (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg) & D=$!
+          for pid in ${A:-} $B $C $D; do wait "$pid"; done
+
+      - name: Playwright browser
+        run: |
+          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
+            npx --prefix agent/graph playwright install-deps chromium
+          else
+            npx --prefix agent/graph playwright install --with-deps chromium
+          fi
+
+      - name: Agent self-tests (deterministic parts, no model spend)
+        run: npm --prefix agent/graph test
+
+      - name: AWS credentials for Bedrock
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # The backend the patched frontend will call: qa's AppSync/Cognito from the live registry.
+      # Writes agent/graph/.env (VITE_APP_AWS_* only — there is no other .env in CI).
+      - name: Point the app at the qa backend
+        run: node agent/graph/bin/backend.mjs qa
+
+      - name: Jira reachability
+        run: node agent/graph/bin/jira-probe.mjs "$ISSUE_KEY"
+
+      - name: Run the agent
+        id: agent
+        env:
+          GH_TOKEN: ${{ secrets.PIONEER_TOKEN }}
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || (vars.PAG_DRY_RUN != 'false') }}
+        run: |
+          set -o pipefail
+          FLAG=""; [ "$DRY" = "true" ] && FLAG="--dry-run"
+          git -C pioneer config user.name  "panda-agent[bot]"
+          git -C pioneer config user.email "panda-agent@users.noreply.github.com"
+          node agent/graph/bin/ci.mjs "$ISSUE_KEY" --repo "$PIONEER_DIR" --base main $FLAG
+
+      - name: Job summary
+        if: always()
+        continue-on-error: true
+        run: |
+          RUN_DIR="${{ steps.agent.outputs.run_dir }}"
+          {
+            echo "## $ISSUE_KEY — $( [ "${{ steps.agent.outputs.pr_url }}" != "" ] && echo "PR ${{ steps.agent.outputs.pr_url }}" || echo "no PR (${{ steps.agent.outputs.refusal || 'see log' }})" )"
+            echo "evidence: **${{ steps.agent.outputs.evidence || 'n/a' }}** · spent \$${{ steps.agent.outputs.spent || '0' }} · ${{ steps.agent.outputs.elapsed || '?' }}s"
+            echo
+            [ -n "$RUN_DIR" ] && cat "$RUN_DIR/timeline.md" 2>/dev/null
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the run folder (prompts, diff, screenshots, video, metrics)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pioneer-${{ env.ISSUE_KEY }}-${{ github.run_id }}
+          path: |
+            agent/graph/runs/${{ env.ISSUE_KEY }}/**
+            agent/graph/runs/metrics.csv
+          retention-days: 90
+          if-no-files-found: ignore
+
+      # The bank of information: every run folder and its metrics row, forever, queryable later.
+      - name: Sync the run to S3
+        if: always() && vars.RUNS_BUCKET != ''
+        continue-on-error: true
+        run: |
+          RUN_DIR="${{ steps.agent.outputs.run_dir }}"
+          [ -n "$RUN_DIR" ] && aws s3 sync "$RUN_DIR" "s3://${{ vars.RUNS_BUCKET }}/runs/$ISSUE_KEY/$(basename "$RUN_DIR")/" --only-show-errors
+          tail -n 1 agent/graph/runs/metrics.csv > /tmp/row.csv
+          aws s3 cp /tmp/row.csv "s3://${{ vars.RUNS_BUCKET }}/metrics/$ISSUE_KEY-${{ github.run_id }}.csv" --only-show-errors
+          head -n 1 agent/graph/runs/metrics.csv | aws s3 cp - "s3://${{ vars.RUNS_BUCKET }}/metrics/_header.csv" --only-show-errors

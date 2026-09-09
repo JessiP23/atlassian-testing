@@ -9,6 +9,7 @@
 //                      going to miss the 20-minute target should fail fast, not finish late.
 
 import { spawn } from 'node:child_process'
+import { TIERS, estimateCost } from './models.mjs'
 
 export const GIT_DENYLIST = [
   'Bash(git commit:*)', 'Bash(git push:*)', 'Bash(git checkout:*)', 'Bash(git switch:*)',
@@ -18,16 +19,24 @@ export const GIT_DENYLIST = [
 /** Parse Claude Code's stream-json for the final result + cost. */
 export function parseStream(lines) {
   let cost = 0, subtype = '', text = ''
+  // Token usage accumulated from every assistant turn, so a session killed before its `result`
+  // event (wall clock) still bills. ESI2-3348's reproduce ran 3 minutes of Opus and was charged $0.
+  const usage = { inTok: 0, outTok: 0 }
   for (const raw of lines) {
     let e
     try { e = JSON.parse(raw) } catch { continue }
+    if (e.type === 'assistant' && e.message?.usage) {
+      const u = e.message.usage
+      usage.inTok += (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) * 0.1 + (u.cache_creation_input_tokens || 0) * 1.25
+      usage.outTok += u.output_tokens || 0
+    }
     if (e.type === 'result') {
       cost = e.total_cost_usd ?? e.cost_usd ?? 0
       subtype = e.subtype || ''
       text = e.result || ''
     }
   }
-  return { cost, subtype, text }
+  return { cost, subtype, text, usage }
 }
 
 /**
@@ -77,6 +86,12 @@ export function runClaude({ cwd, prompt, model, budgetUsd, timeoutMs, onProgress
     const done = (code) => {
       if (timer) clearTimeout(timer)
       const r = parseStream(lines)
+      if (!r.cost && (r.usage.inTok || r.usage.outTok)) {
+        // No `result` event (killed): price the turns we saw at the model's list rates.
+        const tier = Object.values(TIERS).find((t) => t.model === model) || Object.values(TIERS).find((t) => /opus/i.test(t.model)) || { priceIn: 5, priceOut: 25 }
+        r.cost = estimateCost(tier, r.usage.inTok, r.usage.outTok)
+        onProgress(`claude ended without a result event — billing ${Math.round(r.usage.inTok)} in / ${r.usage.outTok} out tokens as $${r.cost.toFixed(3)}`)
+      }
       resolve({ code, ...r, subtype: timedOut ? 'exit_timeout' : r.subtype, timedOut })
     }
     child.on('close', done)
