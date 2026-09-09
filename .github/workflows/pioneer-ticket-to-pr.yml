@@ -172,8 +172,9 @@ jobs:
             echo "## $ISSUE_KEY — $( [ "${{ steps.agent.outputs.pr_url }}" != "" ] && echo "PR ${{ steps.agent.outputs.pr_url }}" || echo "no PR (${{ steps.agent.outputs.refusal || 'see log' }})" )"
             echo "evidence: **${{ steps.agent.outputs.evidence || 'n/a' }}** · spent \$${{ steps.agent.outputs.spent || '0' }} · ${{ steps.agent.outputs.elapsed || '?' }}s"
             echo
-            [ -n "$RUN_DIR" ] && cat "$RUN_DIR/timeline.md" 2>/dev/null
+            [ -n "$RUN_DIR" ] && cat "$RUN_DIR/timeline.md" 2>/dev/null || true
           } >> "$GITHUB_STEP_SUMMARY"
+          true
 
       - name: Keep the run folder (prompts, diff, screenshots, video, metrics)
         if: always()

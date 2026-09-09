@@ -70,6 +70,11 @@ test('no reproducing test says so plainly instead of implying proof', () => {
 })
 
 test('a no-repro run still shows the gate transcript and says why there are no UI shots', () => {
+  // The notice is about a run WITHOUT a QA account. In CI the job env carries one, so pin the
+  // condition the test is about instead of inheriting whatever the runner has.
+  const saved = { ui: process.env.PAG_UI_EVIDENCE, pw: process.env.PAG_APP_PASSWORD }
+  delete process.env.PAG_UI_EVIDENCE; delete process.env.PAG_APP_PASSWORD
+  try {
   const s = {
     issueKey: 'ESI2-3406', baseBranch: 'main', baseSha: 'abcdef1234',
     repro: { status: 'none', reason: 'needs an authenticated session' },
@@ -81,6 +86,10 @@ test('a no-repro run still shows the gate transcript and says why there are no U
   assert.match(out, /!\[the gate on the patched tree\]\(E\/terminal-gate\.png\)/)
   assert.match(out, /No UI screenshots/)
   assert.match(out, /PAG_APP_EMAIL/)
+  } finally {
+    if (saved.ui !== undefined) process.env.PAG_UI_EVIDENCE = saved.ui
+    if (saved.pw !== undefined) process.env.PAG_APP_PASSWORD = saved.pw
+  }
 })
 
 test('a red-to-green run is unchanged by the gate-only fallback', () => {
