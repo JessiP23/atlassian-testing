@@ -1,0 +1,51 @@
+name: Pioneer — poll Jira for labelled tickets
+
+# The trigger, without Jira admin. Every 10 minutes: tickets carrying the label PandaAgentGraph are
+# claimed (label -> PandaAgentGraph-queued) and dispatched to "Pioneer — ESI ticket to PR". A
+# developer adds the label to a ticket they were going to work on anyway; nothing is automatic
+# beyond that. Replace with a Jira Automation web request when someone with project-admin rights
+# sets one up — same workflow, instant instead of ≤10 min.
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: List labelled tickets, dispatch nothing
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: pioneer-poll
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+env:
+  PAG_ENV_PRECEDENCE: env
+  PAG_QUIET_ENV: '1'
+  PAG_TRIGGER_LABEL: ${{ vars.PAG_TRIGGER_LABEL || 'PandaAgentGraph' }}
+  JIRA_URL: ${{ secrets.JIRA_BASE_URL || vars.JIRA_BASE_URL }}
+  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: agent/graph/package-lock.json
+      - run: npm --prefix agent/graph ci --no-audit --no-fund --prefer-offline
+      - name: Claim and dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node agent/graph/bin/poll.mjs ${{ inputs.dry_run && '--dry-run' || '' }}

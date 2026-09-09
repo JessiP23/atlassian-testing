@@ -303,3 +303,16 @@ export async function transition(key, wanted) {
   }
   return { moved: false, reason: `none of ${candidates.join(' / ')} matched`, available: transitions.map((t) => `${t.name} -> ${t.to}`) }
 }
+
+/** JQL search → [{ key, labels }]. Bounded to `max` results; no attachments, no comments. */
+export async function searchIssues(jql, { max = 50 } = {}) {
+  const q = new URLSearchParams({ jql, maxResults: String(max), fields: 'labels,status,summary' })
+  let data
+  try { data = await api(`/rest/api/3/search/jql?${q}`) } catch { data = await api(`/rest/api/3/search?${q}`) }
+  return (data.issues || []).map((i) => ({ key: i.key, labels: i.fields?.labels || [], status: i.fields?.status?.name || '', summary: i.fields?.summary || '' }))
+}
+
+/** Replace one label with another on an issue (the poller's "claimed" marker). */
+export async function swapLabel(key, from, to) {
+  await api(`/rest/api/3/issue/${encodeURIComponent(key)}`, { method: 'PUT', body: { update: { labels: [{ remove: from }, { add: to }] } } })
+}
