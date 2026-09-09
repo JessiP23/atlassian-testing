@@ -19,10 +19,16 @@
 // Bounded at MAX_REPAIR_ATTEMPTS. An agent that cannot make a test pass in three tries is not going
 // to on the fourth; it is going to start deleting assertions. Escalate to a human instead.
 
+import fs from 'node:fs'
+import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { tierFor } from '../lib/models.mjs'
 import { runClaude } from '../lib/agent.mjs'
 import { formatFailures } from '../lib/gatelog.mjs'
 import { MAX_REPAIR_ATTEMPTS } from '../state.mjs'
+
+const exec = promisify(execFile)
 
 const PROMPT = (s, { budgetMs, maxMinutes }) => {
   const f = s.gate?.failures || []
@@ -58,6 +64,12 @@ ${s.repro?.status === 'red' ? `- \`${s.repro.file}\` is the frozen reproducing t
 - Never introduce a credential, key or token as a literal. The workflow scans the added lines and
   refuses the whole run if it finds one.
 - Do not commit and do not switch branches.
+- The gate runs the repo's prettier on every changed file BEFORE lint. A lint fix that prettier
+  undoes is not a fix (ESI2-3194 r11 paid twice for a leading \`;\` that prettier kept re-inserting).
+  So: after editing, run \`npx prettier --write <the files you touched>\`, THEN the lint target
+  (\`npx nx run <project>:lint\`), and only report done when lint is clean on the formatted file.
+  If prettier and eslint disagree on a construct, restructure the code so neither complains
+  (e.g. assign to a const instead of starting a statement with \`(\`).
 - You have ${Math.round(budgetMs / 1000)}s of wall clock. The run has a hard ${maxMinutes}-minute
   deadline and publishing the result takes the rest. Make the smallest change that turns these red.
 
@@ -90,6 +102,15 @@ export function repairNode({ budget, onProgress = () => {} }) {
       budgetUsd: Math.min(allowance, allowance / (MAX_REPAIR_ATTEMPTS - attempts + 1)),
     })
     budget.charge('repair', cost, { model: tier.model, attempt: attempts, exit: code })
+
+    // Format here too, so what verify lints is exactly what the model last saw. A style fix that
+    // survives this pass is real; one that does not is caught now, in the log, not at the next gate.
+    const toFormat = (s.changed || []).filter((f) => f !== s.repro?.file && fs.existsSync(path.join(s.repo, f)))
+    if (toFormat.length) {
+      await exec('npx', ['--no-install', 'prettier', '--write', '--log-level', 'silent', ...toFormat], { cwd: s.repo, maxBuffer: 1 << 24, timeout: 120_000 })
+        .then(() => onProgress(`repair: formatted ${toFormat.length} changed file(s) before handing back to verify`))
+        .catch(() => {})
+    }
 
     return { attempts }
   }

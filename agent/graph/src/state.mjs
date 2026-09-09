@@ -63,6 +63,8 @@ export const S = Annotation.Root({
   // ---- output -------------------------------------------------------------------------------
   pr: last(),                // { title, body, testNotes, rolloutNotes }
   prUrl: last(),
+  extraPrs: last(),          // [{ target, url }] — the lower-environment copies (qa)
+  superseded: last(),        // [number] — earlier agent PRs for this ticket closed by this run
 
   // ---- hand-over ----------------------------------------------------------------------------
   // Set by the `handover` node when the run reaches its deadline (or its repair limit) with the

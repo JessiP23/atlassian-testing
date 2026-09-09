@@ -407,6 +407,37 @@ async function createOrUpdatePr({ repo, allowed, branch, base, title, body, draf
   return { url: url.trim(), updated: false }
 }
 
+/**
+ * Close the agent's earlier open PRs for this ticket (head `agent/<KEY>-fix` or `-rN`, any base)
+ * except the branch just published. Returns the closed PR numbers. Best-effort: a failure here
+ * must never fail a run whose new PRs are already open.
+ */
+/** `agent/<KEY>-<slug>` or `agent/<KEY>-<slug>-rN` — the slug has no hyphens (ci.mjs defaults it to `fix`). */
+export const agentBranchPattern = (issueKey, prefix = process.env.PAG_BRANCH_PREFIX || 'agent/') =>
+  new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}${issueKey}-[a-z0-9]+(-r\\d+)?$`, 'i')
+
+export async function supersedeOlderPrs({ repo, allowed, issueKey, keep, by, onProgress = () => {} }) {
+  const prefix = process.env.PAG_BRANCH_PREFIX || 'agent/'
+  const mine = agentBranchPattern(issueKey, prefix)
+  let list = []
+  try {
+    const { stdout } = await exec('gh', ['pr', 'list', '--repo', allowed, '--state', 'open', '--search', `head:${prefix}${issueKey}-`,
+      '--json', 'number,url,headRefName,baseRefName', '--limit', '100'], { cwd: repo })
+    list = JSON.parse(stdout)
+  } catch { return [] }
+  const older = list.filter((p) => mine.test(p.headRefName) && p.headRefName !== keep)
+  const closed = []
+  for (const p of older) {
+    try {
+      await exec('gh', ['pr', 'close', String(p.number), '--repo', allowed, '--comment',
+        `Superseded by ${by} — a newer run on ${issueKey} carries this change forward. Branch \`${p.headRefName}\` is kept for reference.`], { cwd: repo })
+      closed.push(p.number)
+      onProgress(`superseded #${p.number} (${p.headRefName} -> ${p.baseRefName})`)
+    } catch (e) { onProgress(`could not close #${p.number}: ${String(e.message).split('\n')[0].slice(0, 120)}`) }
+  }
+  return closed
+}
+
 export function publishNode({ budget, dryRun = false }) {
   return async (s) => {
     const tier = tierFor('package')
@@ -773,6 +804,13 @@ export function publishNode({ budget, dryRun = false }) {
       }
     } catch { /* labels are a convenience */ }
 
+    // One PR pair per ticket. A rerun lands on a fresh `-rN` branch whenever a human has committed
+    // to the agent's branch, and every earlier pair stayed open — ESI2-3194 reached fourteen. The
+    // newest run is the one that carries every earlier half (see intake's carry), so the older
+    // agent PRs for this ticket are closed with a pointer, never merged into and never deleted:
+    // the branches stay for anyone who wants to diff the attempts.
+    const superseded = await supersedeOlderPrs({ repo: s.repo, allowed, issueKey: s.issueKey, keep: branch, by: prUrl, onProgress: (l) => console.error(l) })
+
     // ---- write back to Jira -------------------------------------------------------------------
     // The gap this closes: `addComment` was only ever called on the REFUSE path. A successful run
     // left no trace on the ticket at all, so the person who filed it had no way to know a PR
@@ -829,6 +867,6 @@ export function publishNode({ budget, dryRun = false }) {
       }
     }
 
-    return { pr, prUrl, branchName: branch, extraPrs }
+    return { pr, prUrl, branchName: branch, extraPrs, superseded }
   }
 }

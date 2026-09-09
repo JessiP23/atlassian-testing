@@ -22,7 +22,7 @@ import path from 'node:path'
 import { tierFor } from '../lib/models.mjs'
 import { runClaude } from '../lib/agent.mjs'
 import { ensureApp } from '../lib/app.mjs'
-import { collectShots, saveEvidence } from '../lib/repro.mjs'
+import { collectShots, saveEvidence, makeSlideshow } from '../lib/repro.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
 import * as browsermcp from '../lib/browsermcp.mjs'
 
@@ -76,7 +76,10 @@ ${process.env.PAG_APP_EMAIL} — do not sign in again.
 Drive by SNAPSHOT, not by pixels: \`browser_snapshot\` gives you the live accessibility tree (real roles and
 names). Snapshot before you click, snapshot after to confirm the state changed. A SPA action resolves
 asynchronously — \`browser_wait_for\` the expected text instead of assuming it worked.
-If \`browser_start_video\` / \`browser_start_tracing\` exist, call them FIRST and stop them LAST.
+RECORDING IS MANDATORY. Your first browser call is \`browser_start_video\` with
+{"filename":"qa.webm","size":{"width":1440,"height":900}} (load it with the other tools via ToolSearch:
+\`select:mcp__playwright__browser_start_video,mcp__playwright__browser_stop_video,mcp__playwright__browser_close,…\`).
+Your last two calls are \`browser_stop_video\` then \`browser_close\`. A run without qa.webm is a defective run.
 If the browser is NOT signed in (a login form appears), that is a pipeline fault, not yours to fix: take one
 screenshot of it, write \`status: incomplete\` with the reason "browser was not signed in", and STOP. Never
 search the filesystem or environment for credentials, never read or run the pipeline's own scripts, never
@@ -145,7 +148,7 @@ user's role, never touch account or organisation settings beyond what the ticket
    ~10s, then re-navigate to the record and snapshot — do not spend turns polling.
 4. The last screenshot must show the acceptance criterion satisfied — or NOT satisfied, honestly.
 5. Check the immediately surrounding behaviour once (same screen, adjacent action) so a regression is caught.
-6. Set the final \`status\` and \`summary\`. Stop video/tracing if you started them.
+6. Set the final \`status\` and \`summary\`, then \`browser_stop_video\` and \`browser_close\`.
 
 ## Budget
 About ${minutes} minutes. Aim for 3–8 screenshots. If the screen cannot be reached (missing data you cannot
@@ -209,8 +212,15 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
     const shots = got.shots.map((f) => {
       const base = path.basename(f)
       const original = base.replace(/^after-(\d\d-)?/, (_, n) => n || '')
-      return { file: base, caption: captions.get(base) || captions.get(original) || null }
+      return { file: base, caption: captions.get(base) || captions.get(original) || null, path: f }
     }).filter((x) => x.caption || !captions.size) // probe shots the model did not caption stay out once it captioned any
+    // The model is told to record video and sometimes does not. A walkthrough is still owed to the
+    // reviewer, so without a .webm the captioned screenshots become a slideshow gif — deterministic.
+    if (!got.video && !got.gif && shots.length >= 2) {
+      got.gif = await makeSlideshow(shots.map((x) => x.path), path.join(path.dirname(shots[0].path), 'after-walkthrough.gif'))
+      if (got.gif) onProgress('no video from the session — built a slideshow gif from the captioned screenshots')
+    }
+    for (const x of shots) delete x.path
     saveEvidence('qa-result.json', JSON.stringify(result, null, 2))
     let status = result.status || (r.timedOut ? 'incomplete' : shots.length ? 'incomplete' : 'no_output')
     if (mode === 'observe' && shots.length) status = 'observed' // never 'passed': nothing here can prove the fix

@@ -273,6 +273,40 @@ if (led.elapsedMs > led.maxMinutes * 60_000) console.log(`  ⚠ OVER the ${led.m
 if (final?.prUrl) console.log(`\n  ${final?.incomplete ? 'INCOMPLETE HAND-OVER' : 'DRAFT PR'}: ${final.prUrl}\n`)
 else if (final?.refusal) console.log(`\n  refused at ${final.refusal.at}: ${final.refusal.reason}\n`)
 
+// One line per run, appended to runs/metrics.csv — the ledger the hit rate is read from. Every
+// field is already known here; this only writes it down. Columns are fixed so the file stays a
+// spreadsheet: add at the END if you add one.
+{
+  const q = (v) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t }
+  const node = (n) => (led.byNode[n] || 0).toFixed(3)
+  const phaseS = (n) => Math.round((led.phases || []).filter((p) => p.node === n).reduce((a, p) => a + p.ms, 0) / 1000)
+  const prNum = (u) => (String(u || '').match(/\/pull\/(\d+)/) || [])[1] || ''
+  const outcome = final?.refusal ? 'refused' : final?.incomplete ? 'incomplete' : final?.prUrl ? 'published' : 'crashed'
+  const row = [
+    issueKey, runId, new Date(t0).toISOString(), outcome, final?.refusal?.reason || '', final?.refusal?.at || '',
+    Math.round((led.elapsedMs || 0) / 1000 / 60 * 10) / 10, led.spent.toFixed(4),
+    node('intake') , node('rerank'), node('plan'), node('repro'), node('patch'), node('repair'), node('qa'), node('package'),
+    phaseS('patch'), phaseS('verify'), phaseS('repair'), phaseS('deploy'), phaseS('browserqa'),
+    final?.gate?.ok ? 'green' : final?.gate ? 'red' : '', final?.repro?.status || '', final?.repro?.reusedFrom ? 'reused' : final?.repro?.status ? 'authored' : '',
+    final?.attempts || 0, final?.replans || 0, final?.backend?.status || '',
+    final?.qa?.mode || '', final?.qa?.status || '', (final?.qa?.shots || []).length, final?.qa?.video ? 1 : 0, final?.qa?.gif ? 1 : 0,
+    (final?.changed || []).length, prNum(final?.prUrl), (final?.extraPrs || []).map((x) => prNum(x.url)).join(' '), (final?.superseded || []).join(' '),
+    final?.branchName || '', baseSha?.slice(0, 7) || '',
+  ].map(q).join(',')
+  const header = ['ticket', 'run', 'started', 'outcome', 'refuse_reason', 'refuse_at', 'minutes', 'usd',
+    'usd_intake', 'usd_rerank', 'usd_plan', 'usd_repro', 'usd_patch', 'usd_repair', 'usd_qa', 'usd_package',
+    's_patch', 's_verify', 's_repair', 's_deploy', 's_browserqa',
+    'gate', 'repro', 'repro_source', 'repairs', 'replans', 'backend',
+    'qa_mode', 'qa_status', 'qa_shots', 'qa_video', 'qa_gif',
+    'files_changed', 'pr_main', 'pr_extra', 'superseded', 'branch', 'base'].join(',')
+  const file = path.join(path.dirname(path.dirname(trace.dir)), 'metrics.csv')
+  try {
+    if (!fs.existsSync(file)) fs.writeFileSync(file, header + '\n')
+    fs.appendFileSync(file, row + '\n')
+    console.log(`  metrics: ${path.relative(process.cwd(), file)}`)
+  } catch (e) { console.error(`  metrics not written: ${String(e.message).slice(0, 100)}`) }
+}
+
 // Hand the run folder to the workflow, which turns it into the job summary and an artifact.
 if (process.env.GITHUB_OUTPUT) {
   fs.appendFileSync(process.env.GITHUB_OUTPUT, [

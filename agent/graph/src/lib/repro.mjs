@@ -118,6 +118,25 @@ export async function collectShots(outDir, label) {
   return res
 }
 
+/**
+ * Captioned screenshots -> a slideshow gif (2s per frame, 720px wide) when the session left no video.
+ * Deterministic fallback so the PR always carries a walkthrough; null without ffmpeg or < 2 frames.
+ */
+export async function makeSlideshow(pngs, gif) {
+  if (!Array.isArray(pngs) || pngs.length < 2) return null
+  try { await exec('ffmpeg', ['-version'], { timeout: 5_000 }) } catch { return null }
+  const list = `${gif}.txt`
+  try {
+    fs.writeFileSync(list, pngs.map((f) => `file '${path.resolve(f).replace(/'/g, "'\\''")}'\nduration 2`).join('\n') + `\nfile '${path.resolve(pngs.at(-1)).replace(/'/g, "'\\''")}'\n`)
+    await exec('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'concat', '-safe', '0', '-i', list,
+      '-vf', 'scale=720:-2:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=128[p];[s1][p]paletteuse=dither=bayer',
+      gif], { timeout: 120_000 })
+    const mb = fs.statSync(gif).size / 1048576
+    if (mb > 10) { fs.rmSync(gif, { force: true }); return null }
+    return gif
+  } catch { return null } finally { fs.rmSync(list, { force: true }) }
+}
+
 /** webm -> gif via ffmpeg when available; 720px wide, 8 fps, palette-optimised. null if no ffmpeg. */
 export async function makeGif(webm, gif) {
   try { await exec('ffmpeg', ['-version'], { timeout: 5_000 }) } catch { return null }

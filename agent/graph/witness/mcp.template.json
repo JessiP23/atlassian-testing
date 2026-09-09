@@ -3,13 +3,19 @@
     "playwright": {
       "command": "npx",
       "args": [
-        "-y", "@playwright/mcp@latest",
-        "--browser", "chromium",
-        "--caps", "devtools",
+        "-y",
+        "@playwright/mcp@latest",
+        "--browser",
+        "chromium",
+        "--caps",
+        "devtools",
         "--isolated",
-        "--viewport-size", "1440,900",
-        "--storage-state", "__STATE__",
-        "--output-dir", "__OUT__"
+        "--viewport-size",
+        "1440,900",
+        "--storage-state",
+        "__STATE__",
+        "--output-dir",
+        "__OUT__"
       ]
     }
   }
