@@ -267,6 +267,21 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         continue
       }
 
+      // A session the wall clock killed mid-edit leaves a file that is red for whatever state the
+      // last Edit left it in — on ESI2-3348 (GitHub runner, slower jest) that half-test was accepted,
+      // stayed red after a correct fix, and turned a good run into an incomplete hand-over that
+      // superseded a complete PR. Only a test the model signed off (`REPRO: red`) is trusted; a
+      // killed session gets another attempt with what it left, or `none` if it was the last.
+      if (r.timedOut && !/REPRO:\s*red/i.test(r.text)) {
+        onProgress(`repro ran out of time before finishing — the file it left is not trusted`)
+        previous = `Attempt ${attempt} ran out of time before you finished. The file ${specFile} is your unfinished draft — read it, finish it fast (one test, one assertion), run it ONCE, then end with REPRO: red. Do not restart from scratch.`
+        if (attempt === attempts) {
+          fs.rmSync(path.join(s.repo, specFile), { force: true })
+          return { repro: { status: 'none', reason: 'the reproducing test was not finished within the time budget', rung, cost: r.cost } }
+        }
+        continue
+      }
+
       // The runner's word, not the model's: the spec must be RED on this (unpatched) tree.
       const red = await runSpec(s.repo, specFile)
       if (red.ok) {

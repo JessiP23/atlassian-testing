@@ -58,7 +58,9 @@ env:
   PAG_CAP_USD: ${{ vars.PAG_CAP_USD || '15' }}
   PAG_RESERVE_USD: ${{ vars.PAG_RESERVE_USD || '2' }}
   PAG_MAX_MINUTES: ${{ vars.PAG_MAX_MINUTES || '45' }}
-  PAG_PATCH_MINUTES: ${{ vars.PAG_PATCH_MINUTES || '12' }}
+  PAG_PATCH_MINUTES: ${{ vars.PAG_PATCH_MINUTES || '14' }}
+  # A GitHub-hosted runner runs jest 2-3x slower than a laptop; give the failing test room to finish.
+  PAG_REPRO_MINUTES: ${{ vars.PAG_REPRO_MINUTES || '9' }}
   PAG_JIRA_TRANSITION: ${{ vars.PAG_JIRA_TRANSITION || 'READY FOR REVIEW' }}
   PAG_UI_EVIDENCE: '1'
   PAG_APP_URL: http://localhost:3000
@@ -104,6 +106,15 @@ jobs:
         with:
           path: pioneer/node_modules
           key: pioneer-nm-${{ runner.os }}-${{ hashFiles('pioneer/package-lock.json') }}
+
+      # nx's task cache: lint/test/build results for unchanged projects. Restored from the newest
+      # previous run and re-saved every run, so the gate on the runner gets faster week over week.
+      - name: Cache the nx task cache
+        uses: actions/cache@v4
+        with:
+          path: pioneer/.nx/cache
+          key: pioneer-nx-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: pioneer-nx-${{ runner.os }}-
 
       - name: Cache the Playwright browser
         id: pw-cache

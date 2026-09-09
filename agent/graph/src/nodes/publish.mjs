@@ -809,7 +809,9 @@ export function publishNode({ budget, dryRun = false }) {
     // newest run is the one that carries every earlier half (see intake's carry), so the older
     // agent PRs for this ticket are closed with a pointer, never merged into and never deleted:
     // the branches stay for anyone who wants to diff the attempts.
-    const superseded = await supersedeOlderPrs({ repo: s.repo, allowed, issueKey: s.issueKey, keep: branch, by: prUrl, onProgress: (l) => console.error(l) })
+    // …but never let an INCOMPLETE hand-over close a complete PR (3348 r2 did exactly that).
+    const superseded = inc ? [] : await supersedeOlderPrs({ repo: s.repo, allowed, issueKey: s.issueKey, keep: branch, by: prUrl, onProgress: (l) => console.error(l) })
+    if (inc) console.error('incomplete hand-over: earlier PRs for this ticket are left open')
 
     // ---- write back to Jira -------------------------------------------------------------------
     // The gap this closes: `addComment` was only ever called on the REFUSE path. A successful run
