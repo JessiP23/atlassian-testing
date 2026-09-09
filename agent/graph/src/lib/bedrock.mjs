@@ -115,8 +115,13 @@ export async function converse({ model, system, user, maxTokens = 4096, json = f
   // change models when no model will work.
   const name = last?.name || 'unknown'
   const denied = /AccessDenied|UnrecognizedClient|InvalidSignature|ExpiredToken/i.test(name)
+  const noCreds = /CredentialsProviderError|Could not load credentials|TokenProviderError|SSO/i.test(`${name} ${last?.message || ''}`)
   const tried = [...new Set(chain.slice(0, Math.min(Math.ceil(ATTEMPTS / 2), chain.length)))].join(', ')
-  throw new Error(denied
+  throw new Error(noCreds
+    ? `No AWS credentials for Bedrock (${name}). Nothing was retried — this is a sign-in, not capacity. `
+      + `Run \`aws sso login${process.env.PAG_SHELL_AWS_PROFILE ? ` --profile ${process.env.PAG_SHELL_AWS_PROFILE}` : ''}\` and rerun; `
+      + `or put static keys in graph/.env (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY).`
+    : denied
     ? `Bedrock refused ${model}: ${name}. This is PERMISSIONS, not capacity — retrying or switching `
       + `models will not help if the identity is the problem. Check, in this order: the IAM identity `
       + `these credentials resolve to still has bedrock:InvokeModel (a budget guardrail can attach a `
