@@ -11,6 +11,7 @@
 // that uses -A, and that is exactly the path a budget-capped run takes.
 
 import { execFile } from 'node:child_process'
+import { proofFromState, proofBlock } from '../lib/proof.mjs'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -523,9 +524,14 @@ export function publishNode({ budget, dryRun = false }) {
     // as alt text, then again with working URLs. That is the "I only see alt text" bug.
     const narrative = pr.body
 
+    // The ledger goes before the narrative: a reviewer should know how much is demonstrated and how
+    // much is the agent's reading before they read the agent's reading.
+    const proof = proofBlock(proofFromState(s))
     const body = (href) => [
       handover,
       `> **${banner}**`,
+      '',
+      proof,
       '',
       narrative,
       badCites.length ? `\n> ⚠ cites files that are not in this diff: ${badCites.map((f) => `\`${f}\``).join(', ')}` : '',
