@@ -123,6 +123,26 @@ export function ticketIdentifiers(text) {
   return [...out].filter((w) => w.length >= 8 && !noise.test(w)).slice(0, 40)
 }
 
+/**
+ * What the located files CALL into the other layer: GraphQL operations and the generated hooks/types
+ * around them (getActivityLogs, useGetActivityLogsQuery, ActivityLogEntry). These exist in the repo
+ * today — unlike a field the plan wants ADDED — so they are what a code seed can find. Deterministic.
+ */
+const isUiPath = (p) => /packages\/clients\//.test(p) || /\.(tsx|jsx|css|scss)$/.test(p)
+
+export function crossLayerTerms(repo, files) {
+  const out = new Set()
+  for (const f of files.slice(0, 6)) {
+    let text = ''
+    try { text = fs.readFileSync(path.join(repo, f), 'utf8') } catch { continue }
+    for (const m of text.matchAll(/\b(?:query|mutation|subscription)\s+([A-Z]\w{5,})/g)) out.add(m[1])
+    for (const m of text.matchAll(/\buse([A-Z]\w{5,}?)(?:Query|Mutation|LazyQuery|Subscription)\b/g)) { out.add(m[1][0].toLowerCase() + m[1].slice(1)); out.add(m[1]) }
+    for (const m of text.matchAll(/\b(get|list|create|update|delete)([A-Z]\w{4,})\b/g)) out.add(m[1] + m[2])
+    for (const m of text.matchAll(/import\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"]@pioneer\/[^'"]+['"]/g)) for (const id of m[1].split(',')) { const w = id.trim().split(/\s+as\s+/)[0]; if (/^[A-Z]\w{5,}$/.test(w)) out.add(w) }
+  }
+  return [...out].slice(0, 30)
+}
+
 /** Files that define or are named by one of those identifiers — exports, symbols, or the file name itself. */
 function codeSeeds(files, idents) {
   if (!idents.length) return []
@@ -196,7 +216,11 @@ export function locateNode({ budget, onProgress = () => {} }) {
     // A widening from plan: it named what another layer must provide (identifiers, a query name).
     // Those terms join the query and the code seeds, and the previous picks stay in the result.
     const widen = s.escalation?.from === 'plan' ? s.escalation : null
-    const query = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, ...(widen?.terms || [])].join(' ')
+    // On a widening, the terms that matter are the ones the UI files already call (they exist), plus
+    // whatever the plan named (which may not exist yet — that is the point of the change).
+    const widenTerms = widen ? [...new Set([...crossLayerTerms(s.repo, (s.located || []).map((l) => l.path)), ...(widen.terms || [])])] : []
+    if (widen) onProgress?.(`widening with ${widenTerms.length} term(s) from the UI files: ${widenTerms.slice(0, 6).join(', ')}`)
+    const query = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, ...widenTerms].join(' ')
 
     // Deterministic, $0, ~2s. Reads .par/index.json — built once per merge, not per ticket.
     // The router reads `.par/` relative to its cwd. In CI the index is built where PAG_PAR_DIR says
@@ -214,7 +238,7 @@ export function locateNode({ budget, onProgress = () => {} }) {
     // 1. phrases the reporter read on screen — ahead of the lexical score, because an exact label
     //    match is stronger evidence than a term overlap.
     const ticketText = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, s.ticket?.description || '', ...(s.ticket?.comments || []).map((c) => c.body || '')].join(' ')
-    const code = codeSeeds(index.files, [...(widen?.terms || []), ...ticketIdentifiers(ticketText)])
+    const code = codeSeeds(index.files, [...widenTerms, ...ticketIdentifiers(ticketText)])
     const phrases = ticketPhrases([s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, s.ticket?.description || ''].join(' '))
     const seeds = [...code, ...phraseSeeds(index.files, phrases)]
     let candidates = dedupe([...seeds, ...routed]).slice(0, CANDIDATE_K)
@@ -252,7 +276,7 @@ export function locateNode({ budget, onProgress = () => {} }) {
       `ACCEPTANCE: ${(s.spec.acceptanceCriteria || []).join(' | ')}`,
       sym.screen ? `SYMPTOM APPEARS ON: ${sym.screen}${sym.errorText ? ` — "${sym.errorText}"` : ''}` : '',
       sym.layer && sym.layer !== 'unknown' ? `LIKELY LAYER: ${sym.layer}${sym.why ? ` (${sym.why})` : ''} — a pick in a different layer must explain how it reaches that screen.` : '',
-      widen ? `WIDEN ACROSS LAYERS: the plan for the UI files (${(s.located || []).map((l) => l.path).join(', ')}) stopped because another layer must provide ${widen.terms.join(', ')}: "${String(widen.text).slice(0, 400)}". Pick the files in THIS repo that define or resolve those — the GraphQL type/schema, the resolver or lambda, the data access — so the change can be planned end to end. Up to 5 picks; the UI files are kept automatically.` : '',
+      widen ? `WIDEN ACROSS LAYERS: the plan for the UI files (${(s.located || []).map((l) => l.path).join(', ')}) stopped because another layer must change first: "${String(widen.text).slice(0, 400)}". Those UI files call ${widenTerms.slice(0, 8).join(', ') || 'operations named above'}. Pick the files in THIS repo that define or resolve those — the GraphQL schema/type, the resolver or lambda, the data access — so the change can be planned end to end. Up to 5 picks; the UI files are kept automatically. Do not pick UI files again.` : '',
       '',
       'CANDIDATES (rank. path — exports):',
       ...candidates.map((c, i) => `${i + 1}. ${c.path} — ${(c.exports || []).slice(0, 12).join(', ') || '(none)'}`),
@@ -264,6 +288,19 @@ export function locateNode({ budget, onProgress = () => {} }) {
     budget.charge('rerank', estimateCost(tier, inTok, outTok), { model: tier.model, inTok, outTok })
 
     const picks = (data.picks || []).filter((p) => candidates.some((c) => c.path === p.path))
+    if (widen) {
+      // Low confidence here is information for the planner, not a reason to stop: the UI picks are
+      // still right, and the code seeds that matched the operations (the schema, a resolver) ride
+      // along even when the re-rank would not commit to them.
+      const seeded = code.filter((c) => !isUiPath(c.path) && !picks.some((p) => p.path === c.path)).slice(0, 3)
+        .map((c) => ({ path: c.path, reason: `defines ${c.why}` }))
+      const prev = (s.located || []).filter((l) => !picks.some((p) => p.path === l.path))
+      const other = [...picks.filter((p) => !isUiPath(p.path)), ...seeded]
+      onProgress?.(other.length
+        ? `widened: +${other.length} file(s) in the other layer — ${other.map((p) => p.path.split('/').slice(-2).join('/')).join(', ')}`
+        : 'widened: nothing found in the other layer — the plan decides with what it has')
+      return { candidates, located: [...other, ...prev], confidence: data.confidence === 'low' ? 'medium' : data.confidence }
+    }
     if (!picks.length || data.confidence === 'low') {
       return {
         candidates, located: picks, confidence: 'low',
@@ -273,11 +310,6 @@ export function locateNode({ budget, onProgress = () => {} }) {
           detail: `re-rank could not identify an owning file among 25 candidates. Top candidate was ${candidates[0].path}.`,
         },
       }
-    }
-    if (widen) {
-      const prev = (s.located || []).filter((l) => !picks.some((p) => p.path === l.path))
-      onProgress?.(`widened: +${picks.length} file(s) in the other layer — ${picks.map((p) => p.path.split('/').slice(-2).join('/')).join(', ')}`)
-      return { candidates, located: [...picks, ...prev], confidence: data.confidence }
     }
     return { candidates, located: picks, confidence: data.confidence }
   }
