@@ -83,7 +83,7 @@ export function planNode({ budget, onProgress = () => {} }) {
         relatedTickets({ issueKey: s.issueKey, summary: s.spec.summary, terms: [sym.screen, ...(sym.inputs || []).slice(0, 2)] }),
       ])
       history = historyBlock({ commits, related })
-      if (related.tickets?.length) onProgress(`related tickets: ${related.tickets.map((t) => t.key).join(', ')}`)
+      onProgress(`history: ${commits.reduce((n, c) => n + c.commits.length, 0)} commit(s) on ${commits.length} file(s); related tickets: ${related.tickets?.length ? related.tickets.map((t) => t.key).join(', ') : related.error ? `search failed (${related.error})` : 'none found'}`)
     }
     const user = [
       `SPEC: ${s.spec.summary}`,
