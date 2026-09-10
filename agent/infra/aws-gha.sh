@@ -47,15 +47,23 @@ fi
 
 # ── 2. Role + least-privilege policy ───────────────────────────────────────────────────────────────────────
 say "2/4 IAM role $ROLE (assumable only by $REPO@$BRANCH)"
+# GitHub's token names the repo two ways. The classic subject is repo:OWNER/NAME:ref:...; the immutable one
+# is repo:OWNER@OWNER_ID/NAME@REPO_ID:ref:... and is what repos issue today (a rename or a re-created repo
+# with the same name does not match it — that is the point). Trust the exact immutable prefix, read from
+# the repo itself, and keep the classic form so the rule keeps working whichever GitHub sends.
+IMMUTABLE_PREFIX=$(gh api "repos/$REPO/actions/oidc/customization/sub" -q .sub_claim_prefix 2>/dev/null || true)
+SUBS="\"repo:$REPO:ref:refs/heads/$BRANCH\""
+[ -n "$IMMUTABLE_PREFIX" ] && SUBS="\"$IMMUTABLE_PREFIX:ref:refs/heads/$BRANCH\", $SUBS"
 cat > "$tmp/trust.json" <<JSON
 { "Version": "2012-10-17", "Statement": [{
     "Effect": "Allow", "Action": "sts:AssumeRoleWithWebIdentity",
     "Principal": { "Federated": "$OIDC_ARN" },
     "Condition": {
       "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-      "StringLike":   { "token.actions.githubusercontent.com:sub": "repo:$REPO:ref:refs/heads/$BRANCH" }
+      "StringLike":   { "token.actions.githubusercontent.com:sub": [ $SUBS ] }
     } }] }
 JSON
+echo "  trusted subjects: $SUBS"
 if aws iam get-role --role-name "$ROLE" >/dev/null 2>&1; then
   aws iam update-assume-role-policy --role-name "$ROLE" --policy-document "file://$tmp/trust.json"; echo "  trust policy updated"
 else
