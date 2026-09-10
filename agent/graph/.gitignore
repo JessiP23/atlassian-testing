@@ -6,3 +6,4 @@
 runs/
 _to_delete/
 .env
+ci-runs/

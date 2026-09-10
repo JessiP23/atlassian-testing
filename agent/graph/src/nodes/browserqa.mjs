@@ -56,10 +56,13 @@ record what actually happens — that is the "before" a reviewer needs next to t
    the records, and screenshot the outcome — the field that should have changed, and the Activity tab showing
    who changed what. If the outcome matches the ticket's complaint, say so: "reproduced on qa today". If the
    chain actually completes on qa, say THAT plainly — it is a finding, not a failure of yours.
-2. If the scenario does not exist, build it — but ONLY inside the module named "Panda Agent QA" (create that
-   module under the account you are in if it is missing). Never add fields, records or automations to any other
-   module: qa is shared with the whole team. Use the ticket's exact names, create the minimum (collections,
-   fields, two or three records, the automations), then run step 1.
+2. If the scenario does not exist, build it. Where you may build depends on the org you are signed into:
+   in the agent's OWN org (its name contains "QA Org", e.g. "JMartinez QA Org") the whole org is yours —
+   create accounts and modules as the ticket's navigation names them (an "Asset Tracking" module with an
+   "Assets" collection, say), so later tickets find them again. In any other org, build ONLY inside the
+   module named "Panda Agent QA" (create it if missing) — qa is shared with the whole team. Either way use
+   the ticket's exact names, create the minimum (collections, fields, two or three records, the forms or
+   automations), then run step 1.
 3. Never delete or rename anything, anywhere.
 Caption each screenshot as what it shows today. \`status\` must be \`observed\` (a reproduction on the unpatched
 backend proves the bug, never the fix). You are NOT writing tests and you do NOT edit code.` : `You are doing BROWSER QA for ${s.issueKey}: confirm, in a real browser, that the bug the ticket reports
@@ -173,6 +176,18 @@ export function sweepSessionFiles(cwd, outDir, since) {
   return moved
 }
 
+/** null when the API answers (any status but a WAF 403), else a one-line reason. Never throws. */
+export async function backendBlocked(url) {
+  if (!url) return null
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': 'probe' }, body: '{"query":"{__typename}"}', signal: AbortSignal.timeout(10_000) })
+    if (r.status !== 403) return null
+    const text = await r.text().catch(() => '')
+    const waf = /WAFForbidden/i.test(text) || /WAF/i.test(r.headers.get('x-amzn-errortype') || '')
+    return waf ? `the qa API blocks this runner's IP (AWS WAF 403 on ${new URL(url).host}) — browser QA needs an allow-listed egress (PAG_BROWSER_PROXY) or a laptop; the code evidence stands` : null
+  } catch { return null }   // unreachable for another reason: let the session find out and report
+}
+
 export function browserQaNode({ budget, onProgress = () => {} }) {
   return async (s) => {
     const skip = (reason) => { onProgress(`browser QA skipped: ${reason}`); return { qa: { status: 'skipped', reason } } }
@@ -188,6 +203,12 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
     if (!mode) return skip('the fix is not in the web app and the ticket names no screen to look at')
     if (!HAS_LOGIN()) return skip('PAG_APP_EMAIL / PAG_APP_PASSWORD are not set to a real account')
     if (!browsermcp.mcpEnabled()) return skip('PAG_WITNESS_MCP=0')
+    // Is the backend even reachable from HERE? A bogus key should get 401 Unauthorized from AppSync.
+    // 403 WAFForbiddenException means this runner's IP is blocked — on 3436 and 3437 two QA sessions
+    // ($4 each) photographed empty screens before anyone read the console. Fail for cents instead,
+    // and say so in the PR. (Skipped when the browser has its own egress: PAG_BROWSER_PROXY.)
+    const blocked = process.env.PAG_BROWSER_PROXY ? null : await backendBlocked(process.env.VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT)
+    if (blocked) return skip(blocked)
 
     const timeMs = budget.timeFor('browserqa')
     if (timeMs < 180_000) return skip(`${(timeMs / 1000).toFixed(0)}s left on the run — not enough to sign in and walk the ticket`)
@@ -245,7 +266,10 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
     for (const x of shots) delete x.path
     saveEvidence('qa-result.json', JSON.stringify(result, null, 2))
     let status = result.status || (r.timedOut ? 'incomplete' : shots.length ? 'incomplete' : 'no_output')
-    if (mode === 'observe' && shots.length) status = 'observed' // never 'passed': nothing here can prove the fix
+    // never 'passed' in observe mode: nothing here can prove the fix. But an honest 'incomplete'
+    // (the backend was unreachable — WAF 403 from the GitHub runner) must not be relabelled
+    // 'observed' just because screenshots of the failure exist.
+    if (mode === 'observe' && shots.length && status !== 'incomplete') status = 'observed'
     onProgress(`browser QA: ${status} — ${shots.length} screenshot(s), video ${got.video ? 'yes' : 'no'}, trace ${got.trace ? 'yes' : 'no'}`)
     return {
       qa: {

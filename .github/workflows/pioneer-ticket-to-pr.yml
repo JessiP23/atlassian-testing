@@ -64,6 +64,9 @@ env:
   PAG_JIRA_TRANSITION: ${{ vars.PAG_JIRA_TRANSITION || 'READY FOR REVIEW' }}
   PAG_UI_EVIDENCE: '1'
   PAG_APP_URL: http://localhost:3000
+  # Static egress for the QA browser (http://user:pass@host:3128) once that IP is allow-listed on
+  # qa's WAF. Empty = no proxy; QA then probes the API first and skips itself if the runner is blocked.
+  PAG_BROWSER_PROXY: ${{ secrets.PAG_BROWSER_PROXY }}
   PAG_APP_EMAIL: ${{ secrets.PAG_APP_EMAIL }}
   PAG_APP_PASSWORD: ${{ secrets.PAG_APP_PASSWORD }}
   JIRA_URL: ${{ secrets.JIRA_BASE_URL || vars.JIRA_BASE_URL }}
@@ -160,6 +163,16 @@ jobs:
 
       - name: Jira reachability
         run: node agent/graph/bin/jira-probe.mjs "$ISSUE_KEY"
+
+      # Same probe as from a laptop: 401 = reached AppSync (bad key, expected); 403 + WAFForbidden =
+      # this runner's IP is blocked by qa's WAF and browser QA will skip itself.
+      - name: qa API reachability from this runner
+        continue-on-error: true
+        run: |
+          URL=$(grep '^VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT=' agent/graph/.env | cut -d= -f2-)
+          curl -s -o /tmp/probe.json -D /tmp/probe.h -w 'HTTP %{http_code}\n' -X POST "$URL" -H 'content-type: application/json' -H 'x-api-key: probe' -d '{"query":"{__typename}"}'
+          grep -i 'x-amzn-errortype' /tmp/probe.h || true
+          head -c 300 /tmp/probe.json; echo
 
       # The agent's memory of this ticket: earlier runs' red tests are reused for $0, earlier diffs
       # are handed to patch, unmerged halves are carried. On a laptop that lives in runs/; on a fresh

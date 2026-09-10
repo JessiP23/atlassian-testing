@@ -68,6 +68,16 @@ export function writeConfig({ statePath, outDir = path.join(GRAPH_DIR, '.pag', '
       const i = args.indexOf('--storage-state')
       if (i >= 0) args.splice(i, 2)
     }
+    // A static egress IP for the QA browser only. qa's AppSync sits behind AWS WAF, which blocks
+    // datacenter ranges — every GraphQL call from a GitHub-hosted runner got 403 WAFForbiddenException
+    // while the laptop, on a residential IP, sailed through. One allow-listed IP on a small proxy
+    // (PAG_BROWSER_PROXY=http://user:pass@host:3128) makes the runner look like that laptop. Only the
+    // browser goes through it; Bedrock, Jira and GitHub calls do not.
+    if (process.env.PAG_BROWSER_PROXY) {
+      const args = cfg.mcpServers.playwright.args
+      const j = args.indexOf('--output-dir')
+      args.splice(j >= 0 ? j : args.length, 0, '--proxy-server', process.env.PAG_BROWSER_PROXY, '--proxy-bypass', 'localhost,127.0.0.1')
+    }
     fs.mkdirSync(outDir, { recursive: true })
     const p = path.join(outDir, 'mcp.json')
     fs.writeFileSync(p, JSON.stringify(cfg, null, 2))
