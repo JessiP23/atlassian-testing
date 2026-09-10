@@ -134,7 +134,7 @@ jobs:
           fi
           npm --prefix agent/graph ci --no-audit --no-fund --prefer-offline & B=$!
           npm install -g @anthropic-ai/claude-code@${{ vars.CLAUDE_CODE_VERSION || 'latest' }} & C=$!
-          (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg) & D=$!
+          (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg xvfb) & D=$!
           for pid in ${A:-} $B $C $D; do wait "$pid"; done
 
       - name: Playwright browser
@@ -170,9 +170,11 @@ jobs:
         continue-on-error: true
         run: |
           URL=$(grep '^VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT=' agent/graph/.env | cut -d= -f2-)
-          curl -s -o /tmp/probe.json -D /tmp/probe.h -w 'HTTP %{http_code}\n' -X POST "$URL" -H 'content-type: application/json' -H 'x-api-key: probe' -d '{"query":"{__typename}"}'
-          grep -i 'x-amzn-errortype' /tmp/probe.h || true
-          head -c 300 /tmp/probe.json; echo
+          for UA in "curl" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/130.0.0.0 Safari/537.36" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"; do
+            printf '%-14s ' "${UA%% *}"
+            curl -s -o /tmp/probe.json -D /tmp/probe.h -w 'HTTP %{http_code} ' -A "$UA" -X POST "$URL" -H 'content-type: application/json' -H 'x-api-key: probe' -d '{"query":"{__typename}"}'
+            grep -i 'x-amzn-errortype' /tmp/probe.h | tr -d '\r' || echo
+          done
 
       # The agent's memory of this ticket: earlier runs' red tests are reused for $0, earlier diffs
       # are handed to patch, unmerged halves are carried. On a laptop that lives in runs/; on a fresh
@@ -193,6 +195,15 @@ jobs:
         with:
           path: agent/.par/index.json
           key: pioneer-par-${{ hashFiles('pioneer/.git/HEAD', 'pioneer/.git/refs/heads/main') }}
+
+      # A screen for the QA browser. Without one Playwright falls back to headless Chromium, whose
+      # `HeadlessChrome` signature qa's WAF Bot Control rejects with 403 — the same runner's curl got
+      # 401. Headed Chromium on a virtual display is what the laptop runs, and it is let through.
+      - name: Virtual display for the QA browser
+        run: |
+          Xvfb :99 -screen 0 1440x900x24 -nolisten tcp >/dev/null 2>&1 &
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+          sleep 1
 
       - name: Run the agent
         id: agent
