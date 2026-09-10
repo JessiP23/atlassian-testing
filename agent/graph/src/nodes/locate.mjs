@@ -196,7 +196,12 @@ export function locateNode({ budget, onProgress = () => {} }) {
     const query = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText].join(' ')
 
     // Deterministic, $0, ~2s. Reads .par/index.json — built once per merge, not per ticket.
-    const { stdout } = await exec('node', [ROUTER_CLI, 'route', query, '--k', String(CANDIDATE_K), '--json'], {
+    // The router reads `.par/` relative to its cwd. In CI the index is built where PAG_PAR_DIR says
+    // (the workspace), while the router lives in the image — name the files explicitly, or the run
+    // dies at locate with "missing .par/index.json" (3437 on the first container run).
+    const par = process.env.PAG_PAR_DIR || path.join(path.dirname(path.dirname(ROUTER_CLI)), '.par')
+    const { stdout } = await exec('node', [ROUTER_CLI, 'route', query, '--k', String(CANDIDATE_K), '--json',
+      '--index', path.join(par, 'index.json'), '--history', path.join(par, 'history.json')], {
       cwd: path.dirname(path.dirname(ROUTER_CLI)),
       maxBuffer: 1 << 24,
     })
