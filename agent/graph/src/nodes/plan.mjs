@@ -12,7 +12,7 @@ import { tierFor, estimateCost } from '../lib/models.mjs'
 import { DIFF_LIMITS } from '../lib/guard.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
 import { recentCommits, relatedTickets, historyBlock } from '../lib/history.mjs'
-import { ticketIdentifiers } from './locate.mjs'
+import { ticketIdentifiers, conceptStems } from './locate.mjs'
 import { MAX_REPLANS } from '../state.mjs'
 
 // Soft target given to the planner. The hard cap in guard.mjs still applies to the real diff; this
@@ -150,10 +150,14 @@ export function planNode({ budget, onProgress = () => {} }) {
       // live in this repo, and refused). One widening, bounded by MAX_REPLANS; a second escalation
       // after seeing the other layer is a real product decision and is reported as such.
       const terms = ticketIdentifiers(data.escalationReason || '')
-      const widened = esc?.from === 'plan'
-      if (!widened && terms.length && (s.replans ?? 0) < MAX_REPLANS) {
-        onProgress(`plan says another layer must change first (${terms.slice(0, 4).join(', ')}) — widening the search to it instead of refusing`)
-        return { plan: data, escalation: { from: 'plan', text: data.escalationReason, neededFiles: [], terms }, replans: (s.replans ?? 0) + 1 }
+      const stems = conceptStems(data.escalationReason || '')
+      const seen = new Set([...(esc?.terms || []), ...(esc?.stems || [])])
+      const fresh = [...terms, ...stems].filter((t) => !seen.has(t))
+      // Widen when there is something new to search for: identifiers or concepts this run has not
+      // looked up yet. A second escalation that names nothing new is a real product decision.
+      if (fresh.length && (s.replans ?? 0) < MAX_REPLANS) {
+        onProgress(`plan says another layer must change first (${fresh.slice(0, 4).join(', ')}) — widening the search to it instead of refusing`)
+        return { plan: data, escalation: { from: 'plan', text: data.escalationReason, neededFiles: [], terms, stems }, replans: (s.replans ?? 0) + 1 }
       }
       return { plan: data, refusal: { at: 'plan', reason: 'needs_escalation', detail: data.escalationReason } }
     }

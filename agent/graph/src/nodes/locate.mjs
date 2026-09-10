@@ -143,6 +143,50 @@ export function crossLayerTerms(repo, files) {
   return [...out].slice(0, 30)
 }
 
+/**
+ * Concept stems from prose: "impersonation", "impersonated", "impersonates" → "impersonat". These are the
+ * words a plan uses when it asks "how is X recorded in the system?" — and grep answers that question.
+ */
+export function conceptStems(text, { max = 5 } = {}) {
+  const stop = /^(function|component|configuration|information|implementation|application|structure|mechanism|detection|provided|visible|backend|frontend|response|request|customer|separate|retrieved|identifies|original|without|confirm|should|happen|whether|between|through|because|correctly|logic|system|record|records|display|displays|instead|address|location|details|internally|auditing|retaining|question)$/
+  const freq = new Map()
+  for (const m of String(text || '').toLowerCase().matchAll(/\b[a-z]{8,}\b/g)) {
+    const w = m[0]
+    if (stop.test(w)) continue
+    // one light suffix strip so the forms meet: impersonation/impersonated/impersonates/impersonating → impersonat
+    const stem = w.replace(/(ions?|ing|ed|es|s)$/, '')
+    if (stem.length < 7) continue
+    freq.set(stem, (freq.get(stem) || 0) + 1)
+  }
+  return [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, max).map(([w]) => w)
+}
+
+/**
+ * Files whose CONTENT mentions the concept — `git grep -il`, deterministic, ~1s on the monorepo. Product
+ * files only, ranked by how often they mention it. This is how "how is impersonation recorded?" gets
+ * answered by the code instead of by a human.
+ */
+export async function conceptSeeds(repo, stems, { limit = 12 } = {}) {
+  if (!stems.length) return []
+  const counts = new Map()
+  for (const stem of stems) {
+    let out = ''
+    try { ({ stdout: out } = await exec('git', ['grep', '-c', '-i', '-I', '--', stem, ':(glob)**/*.ts', ':(glob)**/*.tsx', ':(glob)**/*.graphql'], { cwd: repo, maxBuffer: 1 << 24, timeout: 20_000 })) } catch (e) { out = e.stdout || '' }
+    for (const line of out.split('\n')) {
+      const m = /^(.+?):(\d+)$/.exec(line.trim())
+      if (!m) continue
+      const f = m[1]
+      if (/(^|\/)(__tests__|__mocks__|test-samples|node_modules|dist)\/|\.(test|spec|stories|d)\.[cm]?[jt]sx?$|\.generated\.|\/generated\//.test(f)) continue
+      const cur = counts.get(f) || { n: 0, stems: new Set() }
+      cur.n += Number(m[2]); cur.stems.add(stem); counts.set(f, cur)
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1].stems.size - a[1].stems.size || b[1].n - a[1].n)
+    .slice(0, limit)
+    .map(([path, v]) => ({ path, exports: [], score: 0, why: `mentions ${[...v.stems].join(', ')} ×${v.n}` }))
+}
+
 /** Files that define or are named by one of those identifiers — exports, symbols, or the file name itself. */
 function codeSeeds(files, idents) {
   if (!idents.length) return []
@@ -238,7 +282,18 @@ export function locateNode({ budget, onProgress = () => {} }) {
     // 1. phrases the reporter read on screen — ahead of the lexical score, because an exact label
     //    match is stronger evidence than a term overlap.
     const ticketText = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, s.ticket?.description || '', ...(s.ticket?.comments || []).map((c) => c.body || '')].join(' ')
-    const code = codeSeeds(index.files, [...widenTerms, ...ticketIdentifiers(ticketText)])
+    let code = codeSeeds(index.files, [...widenTerms, ...ticketIdentifiers(ticketText)])
+    // On a widening, the plan's questions name CONCEPTS ("how is impersonation recorded?"); grep the repo
+    // for them so the next plan reads the implementation instead of asking a human where it is.
+    let concepts = []
+    if (widen) {
+      const stems = conceptStems(`${widen.text} ${s.spec.summary}`)
+      concepts = await conceptSeeds(s.repo, stems)
+      onProgress?.(concepts.length
+        ? `concept seeds (${stems.join(', ')}): ${concepts.slice(0, 5).map((c) => `${c.path.split('/').slice(-2).join('/')} (${c.why})`).join('; ')}`
+        : `concept seeds: nothing in the repo mentions ${stems.join(', ') || 'the plan\'s terms'}`)
+      code = [...concepts, ...code]
+    }
     const phrases = ticketPhrases([s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, s.ticket?.description || ''].join(' '))
     const seeds = [...code, ...phraseSeeds(index.files, phrases)]
     let candidates = dedupe([...seeds, ...routed]).slice(0, CANDIDATE_K)
@@ -276,7 +331,7 @@ export function locateNode({ budget, onProgress = () => {} }) {
       `ACCEPTANCE: ${(s.spec.acceptanceCriteria || []).join(' | ')}`,
       sym.screen ? `SYMPTOM APPEARS ON: ${sym.screen}${sym.errorText ? ` — "${sym.errorText}"` : ''}` : '',
       sym.layer && sym.layer !== 'unknown' ? `LIKELY LAYER: ${sym.layer}${sym.why ? ` (${sym.why})` : ''} — a pick in a different layer must explain how it reaches that screen.` : '',
-      widen ? `WIDEN ACROSS LAYERS: the plan for the UI files (${(s.located || []).map((l) => l.path).join(', ')}) stopped because another layer must change first: "${String(widen.text).slice(0, 400)}". Those UI files call ${widenTerms.slice(0, 8).join(', ') || 'operations named above'}. Pick the files in THIS repo that define or resolve those — the GraphQL schema/type, the resolver or lambda, the data access — so the change can be planned end to end. Up to 5 picks; the UI files are kept automatically. Do not pick UI files again.` : '',
+      widen ? `WIDEN ACROSS LAYERS: the plan for the UI files (${(s.located || []).map((l) => l.path).join(', ')}) stopped because another layer must change first: "${String(widen.text).slice(0, 400)}". Those UI files call ${widenTerms.slice(0, 8).join(', ') || 'operations named above'}.${concepts.length ? ` The candidates marked "mentions …" are where the repo already implements the concept the plan asked about — the plan's questions ("how is it recorded", "is there a field") are answered by reading those; prefer them.` : ''} Pick the files in THIS repo that define or resolve those — the GraphQL schema/type, the resolver or lambda, the data access — so the change can be planned end to end. Up to 5 picks; the UI files are kept automatically. Do not pick UI files again.` : '',
       '',
       'CANDIDATES (rank. path — exports):',
       ...candidates.map((c, i) => `${i + 1}. ${c.path} — ${(c.exports || []).slice(0, 12).join(', ') || '(none)'}`),
@@ -293,7 +348,7 @@ export function locateNode({ budget, onProgress = () => {} }) {
       // still right, and the code seeds that matched the operations (the schema, a resolver) ride
       // along even when the re-rank would not commit to them.
       const seeded = code.filter((c) => !isUiPath(c.path) && !picks.some((p) => p.path === c.path)).slice(0, 3)
-        .map((c) => ({ path: c.path, reason: `defines ${c.why}` }))
+        .map((c) => ({ path: c.path, reason: /^mentions/.test(c.why) ? c.why : `defines ${c.why}` }))
       const prev = (s.located || []).filter((l) => !picks.some((p) => p.path === l.path))
       const other = [...picks.filter((p) => !isUiPath(p.path)), ...seeded]
       onProgress?.(other.length
