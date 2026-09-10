@@ -166,12 +166,12 @@ export function conceptStems(text, { max = 5 } = {}) {
  * files only, ranked by how often they mention it. This is how "how is impersonation recorded?" gets
  * answered by the code instead of by a human.
  */
-export async function conceptSeeds(repo, stems, { limit = 12 } = {}) {
+export async function conceptSeeds(repo, stems, { limit = 12, fixed = false } = {}) {
   if (!stems.length) return []
   const counts = new Map()
   for (const stem of stems) {
     let out = ''
-    try { ({ stdout: out } = await exec('git', ['grep', '-c', '-i', '-I', '--', stem, ':(glob)**/*.ts', ':(glob)**/*.tsx', ':(glob)**/*.graphql'], { cwd: repo, maxBuffer: 1 << 24, timeout: 20_000 })) } catch (e) { out = e.stdout || '' }
+    try { ({ stdout: out } = await exec('git', ['grep', '-c', '-i', '-I', ...(fixed ? ['-F'] : []), '--', stem, ':(glob)**/*.ts', ':(glob)**/*.tsx', ':(glob)**/*.graphql'], { cwd: repo, maxBuffer: 1 << 24, timeout: 20_000 })) } catch (e) { out = e.stdout || '' }
     for (const line of out.split('\n')) {
       const m = /^(.+?):(\d+)$/.exec(line.trim())
       if (!m) continue
@@ -185,6 +185,24 @@ export async function conceptSeeds(repo, stems, { limit = 12 } = {}) {
     .sort((a, b) => b[1].stems.size - a[1].stems.size || b[1].n - a[1].n)
     .slice(0, limit)
     .map(([path, v]) => ({ path, exports: [], score: 0, why: `mentions ${[...v.stems].join(', ')} ×${v.n}` }))
+}
+
+/**
+ * The words the user SAW, as the code would spell them: 3-word windows of plain words from the error text
+ * and the values in the ticket ("74.69.105.162 logged in from Syracuse, NY" → "logged in from"). The
+ * ticket's vocabulary and the code's often share nothing else — 3265 said "impersonation" and "Summary of
+ * Changes"; the code said `is_saiu` and `buildSummary` — but a string the UI renders is in the code verbatim.
+ */
+export function symptomWindows(strings, { max = 6 } = {}) {
+  const out = new Set()
+  for (const str of strings) {
+    const words = String(str || '').toLowerCase().replace(/<[^>]+>/g, ' ').split(/[^a-z]+/).filter(Boolean)
+    for (let i = 0; i + 3 <= words.length; i++) {
+      const w = words.slice(i, i + 3).join(' ')
+      if (w.length >= 10 && words.slice(i, i + 3).some((x) => x.length >= 4)) out.add(w)
+    }
+  }
+  return [...out].slice(0, max)
 }
 
 /** Files that define or are named by one of those identifiers — exports, symbols, or the file name itself. */
@@ -283,6 +301,15 @@ export function locateNode({ budget, onProgress = () => {} }) {
     //    match is stronger evidence than a term overlap.
     const ticketText = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, s.ticket?.description || '', ...(s.ticket?.comments || []).map((c) => c.body || '')].join(' ')
     let code = codeSeeds(index.files, [...widenTerms, ...ticketIdentifiers(ticketText)])
+    // Content search for the literal phrases the reporter saw — every run, not only on a widening.
+    const windows = symptomWindows([sym.errorText, ...(sym.inputs || [])])
+    if (windows.length) {
+      const hits = await conceptSeeds(s.repo, windows, { fixed: true, limit: 6 })
+      if (hits.length) {
+        onProgress?.(`symptom text seeds: ${hits.slice(0, 4).map((c) => `${c.path.split('/').slice(-2).join('/')} (${c.why})`).join('; ')}`)
+        code = [...hits, ...code]
+      }
+    }
     // On a widening, the plan's questions name CONCEPTS ("how is impersonation recorded?"); grep the repo
     // for them so the next plan reads the implementation instead of asking a human where it is.
     let concepts = []

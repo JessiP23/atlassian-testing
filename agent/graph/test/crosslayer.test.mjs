@@ -37,3 +37,11 @@ test('conceptStems turns the plan\'s questions into grep-able stems; conceptSeed
   assert.deepEqual(seeds.map((x) => x.path), ['src/auth.ts'])
   assert.match(seeds[0].why, /mentions impersonat ×3/)
 })
+
+import { symptomWindows } from '../src/nodes/locate.mjs'
+test('symptomWindows turns rendered text into grep-able 3-word phrases', () => {
+  const w = symptomWindows(['74.69.105.162 logged in from Syracuse, NY / United States', 'Summary of Changes'])
+  assert.ok(w.includes('logged in from'), w.join(' | '))
+  assert.ok(w.includes('summary of changes'))
+  assert.ok(!w.some((x) => /\d/.test(x)))
+})

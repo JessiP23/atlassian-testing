@@ -59,6 +59,9 @@ export const S = Annotation.Root({
   backend: last(),      // written by the deploy node: { status: deployed|skipped|failed, versionId, appsyncUrl, userPoolId, lambdas, seeded, minutes, reason }
   qa: last(),           // { status, summary, shots[{file,caption}], video, gif, trace, unresolved[], reason }
   replans: Annotation({ reducer: (a, b) => (b ?? 0), default: () => 0 }),
+  // Cross-layer widenings (plan → locate → plan) are counted apart from re-plans. ESI2-3265 r4: two
+  // widenings spent both re-plan slots, so when reproduce came back with the TRUE file the run refused.
+  widenings: Annotation({ reducer: (a, b) => (b ?? 0), default: () => 0 }),
 
   // ---- output -------------------------------------------------------------------------------
   pr: last(),                // { title, body, testNotes, rolloutNotes }
@@ -91,3 +94,4 @@ export const MAX_REPAIR_ATTEMPTS = Number(process.env.PAG_MAX_REPAIR || 3)
 // over there"; patch: "and the fix needs this file too"). A re-plan is cents; refusing a run that
 // has already found the right file over a counter is not.
 export const MAX_REPLANS = Number(process.env.PAG_MAX_REPLANS || 2)
+export const MAX_WIDENINGS = Number(process.env.PAG_MAX_WIDENINGS || 2)

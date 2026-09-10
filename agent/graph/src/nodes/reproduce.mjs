@@ -197,7 +197,10 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
     const isUi = (p) => profile.isUi(p)
     const target = (s.plan?.impactedFiles || []).find((f) => /\.[tj]sx?$/.test(f) && !/\.d\.ts$/.test(f))
     const specFile = target && reproPathFor(target)
-    let rung = s.plan.impactedFiles.some(isUi) ? 'component' : 'unit'
+    // The rung follows the TARGET file. A cross-layer plan lists a .tsx beside four backend files; a
+    // "component" test placed next to a lambda (3265 r4: audit-model.repro.test.ts, component rung) is
+    // a harness that cannot run.
+    let rung = target && isUi(target) ? 'component' : 'unit'
 
     // No unit runner in this repo (or no source target): nothing to prove at this level.
     const command = specFile && reproCommand(s.repo, specFile)

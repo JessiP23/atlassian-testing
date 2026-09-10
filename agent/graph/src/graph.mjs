@@ -150,12 +150,18 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     // It carries the most valuable output of the whole run — a diagnosis with file:line — so it
     // must be reported as such, not mislabelled as a gate failure (patch sets refusal to null when
     // it escalates, so the fallback below would otherwise claim the gate never passed).
+    // Say what actually happened: were the named files already in a plan (then this is a second
+    // escalation on the same files), or did the run simply have no re-plan left / no file to act on?
+    const named = s.escalation?.neededFiles || []
+    const alreadyPlanned = named.length && named.every((f) => (s.plan?.impactedFiles || []).includes(f))
     const r = s.refusal
       || (s.escalation && {
-        at: 'patch',
-        reason: (s.replans ?? 0) > 0 ? 'escalated_after_replan' : 'escalated_no_target',
-        detail: (s.replans ?? 0) > 0
-          ? `Re-planned once with ${s.escalation.neededFiles?.join(', ') || 'the named files'} and it escalated again — a human should read the analysis below.\n\n${s.escalation.text}`
+        at: s.escalation.from || 'patch',
+        reason: alreadyPlanned ? 'escalated_after_replan' : named.length ? 'replan_budget_exhausted' : 'escalated_no_target',
+        detail: alreadyPlanned
+          ? `Planned with ${named.join(', ')} and the ${s.escalation.from || 'patch'} step escalated again — a human should read the analysis below.\n\n${s.escalation.text}`
+          : named.length
+          ? `The ${s.escalation.from || 'patch'} step named ${named.join(', ')} as where the fix belongs, but the run had no re-plan left (${s.replans ?? 0}/${MAX_REPLANS} used). Its analysis:\n\n${s.escalation.text}`
           : `Escalated without naming a file the workflow could act on.\n\n${s.escalation.text}`,
       })
       || { at: 'verify', reason: 'gate_never_passed', detail: s.gate?.summary || 'unknown' }

@@ -13,7 +13,7 @@ import { DIFF_LIMITS } from '../lib/guard.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
 import { recentCommits, relatedTickets, historyBlock } from '../lib/history.mjs'
 import { ticketIdentifiers, conceptStems } from './locate.mjs'
-import { MAX_REPLANS } from '../state.mjs'
+import { MAX_REPLANS, MAX_WIDENINGS } from '../state.mjs'
 
 // Soft target given to the planner. The hard cap in guard.mjs still applies to the real diff; this
 // is what keeps a plan from ballooning to 8 files and a 21k-token context pack.
@@ -155,9 +155,9 @@ export function planNode({ budget, onProgress = () => {} }) {
       const fresh = [...terms, ...stems].filter((t) => !seen.has(t))
       // Widen when there is something new to search for: identifiers or concepts this run has not
       // looked up yet. A second escalation that names nothing new is a real product decision.
-      if (fresh.length && (s.replans ?? 0) < MAX_REPLANS) {
-        onProgress(`plan says another layer must change first (${fresh.slice(0, 4).join(', ')}) — widening the search to it instead of refusing`)
-        return { plan: data, escalation: { from: 'plan', text: data.escalationReason, neededFiles: [], terms, stems }, replans: (s.replans ?? 0) + 1 }
+      if (fresh.length && (s.widenings ?? 0) < MAX_WIDENINGS) {
+        onProgress(`plan says another layer must change first (${fresh.slice(0, 4).join(', ')}) — widening the search to it instead of refusing (${(s.widenings ?? 0) + 1}/${MAX_WIDENINGS})`)
+        return { plan: data, escalation: { from: 'plan', text: data.escalationReason, neededFiles: [], terms, stems }, widenings: (s.widenings ?? 0) + 1 }
       }
       return { plan: data, refusal: { at: 'plan', reason: 'needs_escalation', detail: data.escalationReason } }
     }
@@ -220,6 +220,8 @@ export function planNode({ budget, onProgress = () => {} }) {
     if (data.hypotheses.length) onProgress(`${data.hypotheses.length} hypothesis(es): ${data.hypotheses.map((h) => `${h.id} [${h.checkable}]`).join(', ')}`)
 
     // Clear the escalation so the next patch attempt starts clean, and count the re-plan.
-    return { plan: data, escalation: null, replans: (s.replans ?? 0) + (esc ? 1 : 0) }
+    // A plan after a widening is not a re-plan: the re-plan slots belong to reproduce and patch, which
+    // read the code and may still name the true file.
+    return { plan: data, escalation: null, replans: (s.replans ?? 0) + (esc && esc.from !== 'plan' ? 1 : 0) }
   }
 }
