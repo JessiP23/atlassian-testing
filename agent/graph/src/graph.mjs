@@ -46,6 +46,11 @@ import { traced } from './lib/trace.mjs'
 /** Any node that set `refusal` short-circuits to the terminal explainer. */
 const orRefuse = (next) => (s) => (s.refusal ? 'refuse' : next)
 
+// A plan that says "another layer must change first" goes back to locate ONCE, with the terms it
+// named, so the other layer's files join the candidates and the next plan spans both. plan.mjs only
+// sets this escalation while replans < MAX_REPLANS, so the loop is bounded there.
+const afterPlanning = (s) => (s.refusal ? 'refuse' : s.escalation?.from === 'plan' ? 'locate' : 'reproduce')
+
 // One re-plan, and only when patch actually named files it needs.
 //
 // Why this edge exists: on ESI2-3379 the patch step spent $1.09 proving the authorization gate sat
@@ -210,7 +215,7 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     .addEdge(START, 'intake')
     .addConditionalEdges('intake', orRefuse('locate'), ['locate', 'refuse'])
     .addConditionalEdges('locate', orRefuse('planning'), ['planning', 'refuse'])
-    .addConditionalEdges('planning', orRefuse('reproduce'), ['reproduce', 'refuse'])
+    .addConditionalEdges('planning', afterPlanning, ['reproduce', 'locate', 'refuse'])
     .addConditionalEdges('reproduce', afterReproduce, ['patch', 'planning', 'refuse'])
     .addConditionalEdges('patch', afterPatch, ['verify', 'planning', 'refuse'])
     .addConditionalEdges('verify', afterVerifyWith(budget), ['deploy', 'repair', 'handover', 'refuse'])

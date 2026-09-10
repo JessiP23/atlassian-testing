@@ -193,7 +193,10 @@ export function locateNode({ budget, onProgress = () => {} }) {
     // the reporter's most precise words, and until now the retriever never saw them.
     const sym = s.spec.symptom || {}
     const symptomText = [sym.errorText, sym.screen, ...(sym.inputs || [])].filter(Boolean).join(' ')
-    const query = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText].join(' ')
+    // A widening from plan: it named what another layer must provide (identifiers, a query name).
+    // Those terms join the query and the code seeds, and the previous picks stay in the result.
+    const widen = s.escalation?.from === 'plan' ? s.escalation : null
+    const query = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, ...(widen?.terms || [])].join(' ')
 
     // Deterministic, $0, ~2s. Reads .par/index.json — built once per merge, not per ticket.
     // The router reads `.par/` relative to its cwd. In CI the index is built where PAG_PAR_DIR says
@@ -211,7 +214,7 @@ export function locateNode({ budget, onProgress = () => {} }) {
     // 1. phrases the reporter read on screen — ahead of the lexical score, because an exact label
     //    match is stronger evidence than a term overlap.
     const ticketText = [s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, s.ticket?.description || '', ...(s.ticket?.comments || []).map((c) => c.body || '')].join(' ')
-    const code = codeSeeds(index.files, ticketIdentifiers(ticketText))
+    const code = codeSeeds(index.files, [...(widen?.terms || []), ...ticketIdentifiers(ticketText)])
     const phrases = ticketPhrases([s.spec.summary, ...(s.spec.acceptanceCriteria || []), symptomText, s.ticket?.description || ''].join(' '))
     const seeds = [...code, ...phraseSeeds(index.files, phrases)]
     let candidates = dedupe([...seeds, ...routed]).slice(0, CANDIDATE_K)
@@ -249,6 +252,7 @@ export function locateNode({ budget, onProgress = () => {} }) {
       `ACCEPTANCE: ${(s.spec.acceptanceCriteria || []).join(' | ')}`,
       sym.screen ? `SYMPTOM APPEARS ON: ${sym.screen}${sym.errorText ? ` — "${sym.errorText}"` : ''}` : '',
       sym.layer && sym.layer !== 'unknown' ? `LIKELY LAYER: ${sym.layer}${sym.why ? ` (${sym.why})` : ''} — a pick in a different layer must explain how it reaches that screen.` : '',
+      widen ? `WIDEN ACROSS LAYERS: the plan for the UI files (${(s.located || []).map((l) => l.path).join(', ')}) stopped because another layer must provide ${widen.terms.join(', ')}: "${String(widen.text).slice(0, 400)}". Pick the files in THIS repo that define or resolve those — the GraphQL type/schema, the resolver or lambda, the data access — so the change can be planned end to end. Up to 5 picks; the UI files are kept automatically.` : '',
       '',
       'CANDIDATES (rank. path — exports):',
       ...candidates.map((c, i) => `${i + 1}. ${c.path} — ${(c.exports || []).slice(0, 12).join(', ') || '(none)'}`),
@@ -269,6 +273,11 @@ export function locateNode({ budget, onProgress = () => {} }) {
           detail: `re-rank could not identify an owning file among 25 candidates. Top candidate was ${candidates[0].path}.`,
         },
       }
+    }
+    if (widen) {
+      const prev = (s.located || []).filter((l) => !picks.some((p) => p.path === l.path))
+      onProgress?.(`widened: +${picks.length} file(s) in the other layer — ${picks.map((p) => p.path.split('/').slice(-2).join('/')).join(', ')}`)
+      return { candidates, located: [...picks, ...prev], confidence: data.confidence }
     }
     return { candidates, located: picks, confidence: data.confidence }
   }

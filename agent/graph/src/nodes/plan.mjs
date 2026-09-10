@@ -12,6 +12,8 @@ import { tierFor, estimateCost } from '../lib/models.mjs'
 import { DIFF_LIMITS } from '../lib/guard.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
 import { recentCommits, relatedTickets, historyBlock } from '../lib/history.mjs'
+import { ticketIdentifiers } from './locate.mjs'
+import { MAX_REPLANS } from '../state.mjs'
 
 // Soft target given to the planner. The hard cap in guard.mjs still applies to the real diff; this
 // is what keeps a plan from ballooning to 8 files and a 21k-token context pack.
@@ -115,13 +117,15 @@ export function planNode({ budget, onProgress = () => {} }) {
         '',
         '## THIS IS A RE-PLAN — the first plan could not be implemented',
         '',
-        `The ${esc.from || 'patch'} step read the code and stopped without editing anything, because ${esc.from === 'reproduce'
-          ? 'the files the previous plan allowed cannot produce the ticket\'s symptom for the ticket\'s inputs'
-          : 'the fix is not reachable from the files the previous plan allowed'}. Its analysis follows. Treat it as the`,
-        'strongest available evidence: it comes from reading the actual code, not from retrieval.',
+        esc.from === 'plan'
+          ? 'The previous plan stopped because it believed another layer had to change first. This repository CONTAINS that layer — the candidate list now includes the files that provide what it asked for. Plan the change ACROSS layers (data shape, resolver/lambda, UI) within the budget. Escalate again only if the ticket needs a product decision no code can settle, and say exactly which.'
+          : `The ${esc.from || 'patch'} step read the code and stopped without editing anything, because ${esc.from === 'reproduce'
+            ? 'the files the previous plan allowed cannot produce the ticket\'s symptom for the ticket\'s inputs'
+            : 'the fix is not reachable from the files the previous plan allowed'}. Its analysis follows. Treat it as the`,
+        esc.from === 'plan' ? '' : 'strongest available evidence: it comes from reading the actual code, not from retrieval.',
         '',
         `Previously allowed (insufficient): ${s.plan?.impactedFiles?.join(', ') || '(none)'}`,
-        `It says it needs: ${esc.neededFiles.join(', ') || '(named no usable file)'}`,
+        `It says it needs: ${esc.neededFiles.join(', ') || (esc.terms?.length ? `code that provides ${esc.terms.join(', ')}` : '(named no usable file)')}`,
         '',
         '```',
         String(esc.text).slice(0, 6000),
@@ -140,6 +144,17 @@ export function planNode({ budget, onProgress = () => {} }) {
     budget.charge('plan', estimateCost(tier, inTok, outTok), { model: tier.model, inTok, outTok })
 
     if (data.needsEscalation) {
+      // "The backend must provide X first" is not a reason to stop in a monorepo that CONTAINS the
+      // backend — it is a reason to widen the search to the files that provide X and plan across the
+      // layers (ESI2-3265: the plan named getActivityLogs and an isImpersonated flag, both of which
+      // live in this repo, and refused). One widening, bounded by MAX_REPLANS; a second escalation
+      // after seeing the other layer is a real product decision and is reported as such.
+      const terms = ticketIdentifiers(data.escalationReason || '')
+      const widened = esc?.from === 'plan'
+      if (!widened && terms.length && (s.replans ?? 0) < MAX_REPLANS) {
+        onProgress(`plan says another layer must change first (${terms.slice(0, 4).join(', ')}) — widening the search to it instead of refusing`)
+        return { plan: data, escalation: { from: 'plan', text: data.escalationReason, neededFiles: [], terms }, replans: (s.replans ?? 0) + 1 }
+      }
       return { plan: data, refusal: { at: 'plan', reason: 'needs_escalation', detail: data.escalationReason } }
     }
     if (!data.impactedFiles?.length) {
