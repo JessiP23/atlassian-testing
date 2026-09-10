@@ -86,7 +86,7 @@ echo "  inline policy panda-agent-runtime: Bedrock invoke on the agent's models,
 
 # ── 3. Runs bucket ─────────────────────────────────────────────────────────────────────────────────────────
 say "3/4 S3 bucket $BUCKET"
-if aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then echo "  exists"; else
+if aws s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then echo "  exists"; else
   if [ "$REGION" = us-east-1 ]; then aws s3api create-bucket --bucket "$BUCKET" >/dev/null
   else aws s3api create-bucket --bucket "$BUCKET" --create-bucket-configuration LocationConstraint="$REGION" >/dev/null; fi
   echo "  created"
@@ -96,7 +96,7 @@ aws s3api put-public-access-block --bucket "$BUCKET" --public-access-block-confi
 aws s3api put-bucket-versioning --bucket "$BUCKET" --versioning-configuration Status=Enabled
 aws s3api put-bucket-lifecycle-configuration --bucket "$BUCKET" --lifecycle-configuration '{"Rules":[
   {"ID":"evidence-180d","Filter":{"Prefix":"evidence/"},"Status":"Enabled","Expiration":{"Days":180}},
-  {"ID":"old-versions-30d","Filter":{"Prefix":""},"Status":"Enabled","NoncurrentVersionExpiration":{"NoncurrentDays":30}}]}'
+  {"ID":"old-versions-30d","Filter":{"Prefix":""},"Status":"Enabled","NoncurrentVersionExpiration":{"NoncurrentDays":30}}]}' >/dev/null
 echo "  private, versioned; evidence/ expires after 180 days (runs/ and metrics/ are kept)"
 
 # ── 4. Budget + kill switch ────────────────────────────────────────────────────────────────────────────────
@@ -136,13 +136,20 @@ fi
 existing=$(aws budgets describe-budget-actions-for-budget --account-id "$ACCOUNT" --budget-name panda-agent-monthly \
   --query "Actions[?ActionType=='APPLY_IAM_POLICY'].ActionId" --output text 2>/dev/null || true)
 if [ -n "$existing" ]; then echo "  kill-switch action exists ($existing)"; else
-  aws budgets create-budget-action --account-id "$ACCOUNT" --budget-name panda-agent-monthly \
-    --notification-type ACTUAL --action-type APPLY_IAM_POLICY \
-    --action-threshold ActionThresholdValue=100,ActionThresholdType=PERCENTAGE \
-    --definition "IamActionDefinition={PolicyArn=$KILL_ARN,Roles=[$ROLE]}" \
-    --execution-role-arn "$BUDGET_ROLE_ARN" --approval-model AUTOMATIC \
-    --subscribers "SubscriptionType=EMAIL,Address=$ALERT_EMAIL" >/dev/null
-  echo "  kill-switch action created: at 100% AWS attaches panda-agent-kill to $ROLE automatically"
+  # A role created seconds ago is not yet visible to the Budgets service ("permission required to assume
+  # ExecutionRole") — IAM propagates in a few seconds; retry instead of failing the whole script.
+  for attempt in 1 2 3 4 5 6; do
+    if aws budgets create-budget-action --account-id "$ACCOUNT" --budget-name panda-agent-monthly \
+        --notification-type ACTUAL --action-type APPLY_IAM_POLICY \
+        --action-threshold ActionThresholdValue=100,ActionThresholdType=PERCENTAGE \
+        --definition "IamActionDefinition={PolicyArn=$KILL_ARN,Roles=[$ROLE]}" \
+        --execution-role-arn "$BUDGET_ROLE_ARN" --approval-model AUTOMATIC \
+        --subscribers "SubscriptionType=EMAIL,Address=$ALERT_EMAIL" >/dev/null 2>"$tmp/err"; then
+      echo "  kill-switch action created: at 100% AWS attaches panda-agent-kill to $ROLE automatically"; break
+    fi
+    if [ "$attempt" = 6 ]; then cat "$tmp/err" >&2; exit 1; fi
+    echo "  waiting for IAM to propagate the execution role ($attempt/6)…"; sleep 10
+  done
 fi
 
 say "Done. In the repo:"
