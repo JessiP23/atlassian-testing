@@ -49,7 +49,15 @@ const REPRO_BUDGET = Number(process.env.PAG_REPRO_BUDGET || 1.5)
 // two 75s attempts at a component test both die mid-file; one 150s attempt can finish.
 const MIN_ATTEMPT_MS = Number(process.env.PAG_MIN_ATTEMPT_MS || 120_000)
 const attemptsFor = (budget) => (budget.phaseTimeFor('reproduce', 1) >= 2 * MIN_ATTEMPT_MS ? ATTEMPTS : 1)
-const attemptShare = (budget, attempt, attempts = ATTEMPTS) => budget.phaseTimeFor('reproduce', attempts - attempt + 1)
+// Not an even split. The first attempt does the reading and the writing; the second only finishes a
+// draft. 3440: four component attempts, all killed at 270s (a web-app test run is 2–3 min and the protocol
+// needs two) — $4 and 20 min for no test. Attempt 1 gets FIRST_SHARE of what is left; attempt 2 the rest.
+const FIRST_SHARE = Number(process.env.PAG_REPRO_FIRST_SHARE || 0.7)
+const attemptShare = (budget, attempt, attempts = ATTEMPTS) => {
+  const left = budget.phaseTimeFor('reproduce', 1)
+  if (attempts <= 1 || attempt === attempts) return left
+  return Math.floor(left * FIRST_SHARE)
+}
 
 
 /**
@@ -127,8 +135,12 @@ the user sees or what handler/mutation is called. jsdom cannot measure layout �
 Use jest with the owning project's existing config. Follow the conventions of the nearest existing
 spec file (imports, mocks, describe/it naming).`}
 
-## Run it with exactly this command
+## Run it with exactly this command — and run it at most TWICE
     ${cmd}
+One run of this command can take 2–3 minutes on a large project. Two runs are budgeted (step 1 and step 2
+below); a third run, or trying vitest/jest directly, or reading vite/jest/eslint configs to "understand the
+harness", is how attempts die on the clock with nothing frozen. The harness is configured; the workflow gave
+you the command. Research is bounded too: after ~10 tool calls, write the file.
 
 ## Protocol — pass first, then invert
 1. Write ONE test whose name reads like the ticket's symptom, e.g. "update-import error row keeps

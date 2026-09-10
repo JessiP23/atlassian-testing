@@ -68,7 +68,7 @@ env:
   PAG_MAX_MINUTES: ${{ vars.PAG_MAX_MINUTES || '45' }}
   PAG_PATCH_MINUTES: ${{ vars.PAG_PATCH_MINUTES || '14' }}
   # A GitHub-hosted runner runs jest 2-3x slower than a laptop; give the failing test room to finish.
-  PAG_REPRO_MINUTES: ${{ vars.PAG_REPRO_MINUTES || '9' }}
+  PAG_REPRO_MINUTES: ${{ vars.PAG_REPRO_MINUTES || '12' }}
   PAG_JIRA_TRANSITION: ${{ vars.PAG_JIRA_TRANSITION || 'READY FOR REVIEW' }}
   PAG_UI_EVIDENCE: '1'
   PAG_APP_URL: http://localhost:3000
