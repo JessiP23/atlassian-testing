@@ -135,6 +135,12 @@ jobs:
       - name: Runtime pins in this image
         run: |
           echo "image   ${{ vars.PAG_IMAGE_TAG || 'edge' }}  ($PAG_IMAGE_REF)"
+          # `edge` must be built from the commit this run is on; a stale image silently runs old agent code
+          # (3437: two runs died at locate on a fix that was already on main but not yet in the image).
+          if [ "${{ vars.PAG_IMAGE_TAG || 'edge' }}" = "edge" ] && [[ "$PAG_IMAGE_REF" != *"@${{ github.sha }}" ]]; then
+            echo "::error::image edge is built from ${PAG_IMAGE_REF##*@} but this run is on ${{ github.sha }} — wait for 'Build panda-agent image' to finish, then run again"
+            exit 1
+          fi
           echo "node    $(node --version)"
           echo "claude  $(claude --version 2>/dev/null | head -1)"
           echo "mcp     $(npm ls -g @playwright/mcp --depth=0 2>/dev/null | grep -o '@playwright/mcp@[^ ]*')"

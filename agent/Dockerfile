@@ -7,6 +7,7 @@
 #   Claude Code           2.1.267 (stream-json format is parsed by the agent)
 #   Xvfb                  headed Chromium — qa's WAF Bot Control rejects HeadlessChrome
 #   ffmpeg                webm → gif for the PR
+#   IS_SANDBOX=1          lets Claude Code run unattended as root inside this disposable container
 #
 # Rebuild on purpose (monthly bump PR, gated by the agent's self-tests and retrieval eval), never by accident.
 FROM node:20.14.0-bookworm
@@ -23,7 +24,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CLAUDE_CODE_USE_BEDROCK=1 \
     PAG_ENV_PRECEDENCE=env \
     PAG_QUIET_ENV=1 \
-    PAG_IMAGE_REF=${AGENT_REF}
+    PAG_IMAGE_REF=${AGENT_REF} \
+    IS_SANDBOX=1
+# IS_SANDBOX=1: Claude Code refuses --dangerously-skip-permissions as root unless the environment declares
+# itself a deliberate sandbox (its check is literally `isRootOutsideDeliberateSandbox`). GitHub Actions runs
+# `container:` jobs as root and mounts the workspace root-owned, so a non-root USER breaks checkout/cache;
+# this image only ever runs as a disposable CI container, which is exactly the case the flag exists for.
 
 # OS: virtual display, video encode, fonts, git, jq, AWS CLI, GitHub CLI. All from the pinned base's Debian.
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
