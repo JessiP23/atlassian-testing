@@ -292,13 +292,16 @@ else if (final?.refusal) console.log(`\n  refused at ${final.refusal.at}: ${fina
     final?.qa?.mode || '', final?.qa?.status || '', (final?.qa?.shots || []).length, final?.qa?.video ? 1 : 0, final?.qa?.gif ? 1 : 0,
     (final?.changed || []).length, prNum(final?.prUrl), (final?.extraPrs || []).map((x) => prNum(x.url)).join(' '), (final?.superseded || []).join(' '),
     final?.branchName || '', baseSha?.slice(0, 7) || '',
+    // appended columns (keep at the end): where it ran, and the queue latency the runner adds
+    process.env.PAG_IMAGE_REF || 'laptop', process.env.PAG_QUEUED_AT || '',
+    process.env.PAG_QUEUED_AT ? Math.round((t0 - Date.parse(process.env.PAG_QUEUED_AT)) / 1000) : '',
   ].map(q).join(',')
   const header = ['ticket', 'run', 'started', 'outcome', 'refuse_reason', 'refuse_at', 'minutes', 'usd',
     'usd_intake', 'usd_rerank', 'usd_plan', 'usd_repro', 'usd_patch', 'usd_repair', 'usd_qa', 'usd_package',
     's_patch', 's_verify', 's_repair', 's_deploy', 's_browserqa',
     'gate', 'repro', 'repro_source', 'repairs', 'replans', 'backend',
     'qa_mode', 'qa_status', 'qa_shots', 'qa_video', 'qa_gif',
-    'files_changed', 'pr_main', 'pr_extra', 'superseded', 'branch', 'base'].join(',')
+    'files_changed', 'pr_main', 'pr_extra', 'superseded', 'branch', 'base', 'image', 'queued_at', 's_queue_to_start'].join(',')
   const file = path.join(path.dirname(path.dirname(trace.dir)), 'metrics.csv')
   try {
     if (!fs.existsSync(file)) fs.writeFileSync(file, header + '\n')

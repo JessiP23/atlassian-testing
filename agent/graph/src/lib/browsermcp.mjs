@@ -63,6 +63,15 @@ export function writeConfig({ statePath, outDir = path.join(GRAPH_DIR, '.pag', '
     outDir = path.resolve(outDir)
     const tpl = fs.readFileSync(TEMPLATE, 'utf8')
     const cfg = JSON.parse(tpl.replace('__STATE__', statePath || '').replace('__OUT__', outDir))
+    // Inside the panda-agent image the MCP is baked in (`playwright-mcp` on PATH, pinned) — use it and
+    // download nothing at run time. Elsewhere the template's pinned `npx -y @playwright/mcp@<v>` applies.
+    const baked = ['/usr/local/bin/playwright-mcp', '/usr/bin/playwright-mcp'].find((p) => fs.existsSync(p))
+    if (baked) {
+      const pw = cfg.mcpServers.playwright
+      const i = pw.args.findIndex((x) => /^@playwright\/mcp/.test(x))
+      pw.command = baked
+      pw.args = pw.args.slice(i + 1)
+    }
     if (!statePath) {
       const args = cfg.mcpServers.playwright.args
       const i = args.indexOf('--storage-state')

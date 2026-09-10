@@ -79,8 +79,21 @@ jobs:
     if: startsWith(github.event.client_payload.issue_key || inputs.issue_key, 'ESI2-')
     runs-on: ubuntu-latest
     timeout-minutes: 75   # backstop: install (~10 min cold) + the agent's own 45-minute clock
+    # The pinned runtime (see agent/Dockerfile): Node, Playwright + Chromium, Xvfb, ffmpeg, Claude Code,
+    # and the agent itself at /opt/panda-agent. PAG_IMAGE_TAG (repo variable) is the release pin —
+    # v1.0.0 for the team's label, `edge` (built from main) for PandaAgentGraphDev.
+    container:
+      image: ghcr.io/jessip23/panda-agent:${{ vars.PAG_IMAGE_TAG || 'edge' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --shm-size=2g
+    env:
+      AGENT_DIR: /opt/panda-agent/agent
     steps:
-      - name: Checkout the agent
+      # The agent code comes from the image (built from the tag), not from a checkout — that is what
+      # makes a run reproducible. The repo is checked out only so the workflow's own files are present.
+      - name: Checkout the agent repo (workflow files)
         uses: actions/checkout@v5
 
       - name: Checkout pioneer (full history — history mining and baselines read merges)
@@ -92,14 +105,6 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.PIONEER_TOKEN }}
           persist-credentials: true   # the agent pushes agent/* branches with this token
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: pioneer/.nvmrc
-          cache: npm
-          cache-dependency-path: |
-            pioneer/package-lock.json
-            agent/graph/package-lock.json
 
       # 2.2 GB of node_modules: cached on the lockfile so a warm run restores in ~1 min instead of
       # a 10-minute npm ci. First run per lockfile pays the install.
@@ -119,34 +124,17 @@ jobs:
           key: pioneer-nx-${{ runner.os }}-${{ github.run_id }}
           restore-keys: pioneer-nx-${{ runner.os }}-
 
-      - name: Cache the Playwright browser
-        id: pw-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: pw-${{ runner.os }}-${{ hashFiles('agent/graph/package-lock.json') }}
+      - name: Install pioneer dependencies (cache miss only — the image carries every other tool)
+        if: steps.nm-cache.outputs.cache-hit != 'true'
+        run: cd pioneer && npm ci --no-audit --no-fund --prefer-offline
 
-      - name: Install (pioneer deps, agent deps, Claude Code, ffmpeg — concurrently)
+      - name: Runtime pins in this image
         run: |
-          set -euo pipefail
-          if [ "${{ steps.nm-cache.outputs.cache-hit }}" != "true" ]; then
-            (cd pioneer && npm ci --no-audit --no-fund --prefer-offline) & A=$!
-          fi
-          npm --prefix agent/graph ci --no-audit --no-fund --prefer-offline & B=$!
-          npm install -g @anthropic-ai/claude-code@${{ vars.CLAUDE_CODE_VERSION || 'latest' }} & C=$!
-          (sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg xvfb) & D=$!
-          for pid in ${A:-} $B $C $D; do wait "$pid"; done
-
-      - name: Playwright browser
-        run: |
-          if [ "${{ steps.pw-cache.outputs.cache-hit }}" = "true" ]; then
-            npx --prefix agent/graph playwright install-deps chromium
-          else
-            npx --prefix agent/graph playwright install --with-deps chromium
-          fi
-
-      - name: Agent self-tests (deterministic parts, no model spend)
-        run: npm --prefix agent/graph test
+          echo "image   ${{ vars.PAG_IMAGE_TAG || 'edge' }}  ($PAG_IMAGE_REF)"
+          echo "node    $(node --version)"
+          echo "claude  $(claude --version 2>/dev/null | head -1)"
+          echo "mcp     $(npm ls -g @playwright/mcp --depth=0 2>/dev/null | grep -o '@playwright/mcp@[^ ]*')"
+          echo "chromium $(ls $PLAYWRIGHT_BROWSERS_PATH | tr '\n' ' ')"
 
       - name: AWS credentials for Bedrock
         uses: aws-actions/configure-aws-credentials@v4
@@ -159,17 +147,17 @@ jobs:
       # The backend the patched frontend will call: qa's AppSync/Cognito from the live registry.
       # Writes agent/graph/.env (VITE_APP_AWS_* only — there is no other .env in CI).
       - name: Point the app at the qa backend
-        run: node agent/graph/bin/backend.mjs qa
+        run: node $AGENT_DIR/graph/bin/backend.mjs qa
 
       - name: Jira reachability
-        run: node agent/graph/bin/jira-probe.mjs "$ISSUE_KEY"
+        run: node $AGENT_DIR/graph/bin/jira-probe.mjs "$ISSUE_KEY"
 
       # Same probe as from a laptop: 401 = reached AppSync (bad key, expected); 403 + WAFForbidden =
       # this runner's IP is blocked by qa's WAF and browser QA will skip itself.
       - name: qa API reachability from this runner
         continue-on-error: true
         run: |
-          URL=$(grep '^VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT=' agent/graph/.env | cut -d= -f2-)
+          URL=$(grep '^VITE_APP_AWS_APPSYNC_GRAPHQL_ENDPOINT=' $AGENT_DIR/graph/.env | cut -d= -f2-)
           for UA in "curl" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/130.0.0.0 Safari/537.36" "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"; do
             printf '%-14s ' "${UA%% *}"
             curl -s -o /tmp/probe.json -D /tmp/probe.h -w 'HTTP %{http_code} ' -A "$UA" -X POST "$URL" -H 'content-type: application/json' -H 'x-api-key: probe' -d '{"query":"{__typename}"}'
@@ -201,9 +189,14 @@ jobs:
       # 401. Headed Chromium on a virtual display is what the laptop runs, and it is let through.
       - name: Virtual display for the QA browser
         run: |
-          Xvfb :99 -screen 0 1440x900x24 -nolisten tcp >/dev/null 2>&1 &
+          pgrep -x Xvfb >/dev/null || (Xvfb :99 -screen 0 1440x900x24 -nolisten tcp >/dev/null 2>&1 &)
           echo "DISPLAY=:99" >> "$GITHUB_ENV"
           sleep 1
+
+      - name: Queue latency (when this run was requested vs when the agent starts)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "PAG_QUEUED_AT=$(gh run view ${{ github.run_id }} --repo ${{ github.repository }} --json createdAt -q .createdAt)" >> "$GITHUB_ENV"
 
       - name: Run the agent
         id: agent
@@ -217,7 +210,7 @@ jobs:
           git -C pioneer config user.name  "panda-agent[bot]"
           git -C pioneer config user.email "panda-agent@users.noreply.github.com"
           [ "${{ steps.par-cache.outputs.cache-hit }}" = "true" ] && FLAG="$FLAG --skip-index"
-          node agent/graph/bin/ci.mjs "$ISSUE_KEY" --repo "$PIONEER_DIR" --base main $FLAG
+          node $AGENT_DIR/graph/bin/ci.mjs "$ISSUE_KEY" --repo "$PIONEER_DIR" --base main $FLAG
 
       - name: Job summary
         if: always()
@@ -249,7 +242,11 @@ jobs:
         continue-on-error: true
         run: |
           RUN_DIR="${{ steps.agent.outputs.run_dir }}"
-          [ -n "$RUN_DIR" ] && aws s3 sync "$RUN_DIR" "s3://${{ vars.RUNS_BUCKET }}/runs/$ISSUE_KEY/$(basename "$RUN_DIR")/" --only-show-errors
+          # memory (restored on reruns) and evidence (never restored) are different things — two prefixes
+          # runs/ keeps what a rerun reads back (phase state, patch.diff, the frozen repro test + its logs);
+          # images, video and traces go to evidence/ only.
+          [ -n "$RUN_DIR" ] && aws s3 sync "$RUN_DIR" "s3://${{ vars.RUNS_BUCKET }}/runs/$ISSUE_KEY/$(basename "$RUN_DIR")/" --only-show-errors --exclude "qa/*" --exclude "evidence/*.png" --exclude "evidence/*.webm" --exclude "evidence/*.gif" --exclude "evidence/*.zip"
+          [ -n "$RUN_DIR" ] && [ -d "$RUN_DIR/evidence" ] && aws s3 sync "$RUN_DIR/evidence" "s3://${{ vars.RUNS_BUCKET }}/evidence/$ISSUE_KEY/$(basename "$RUN_DIR")/" --only-show-errors
           tail -n 1 agent/graph/runs/metrics.csv > /tmp/row.csv
           aws s3 cp /tmp/row.csv "s3://${{ vars.RUNS_BUCKET }}/metrics/$ISSUE_KEY-${{ github.run_id }}.csv" --only-show-errors
           head -n 1 agent/graph/runs/metrics.csv | aws s3 cp - "s3://${{ vars.RUNS_BUCKET }}/metrics/_header.csv" --only-show-errors
