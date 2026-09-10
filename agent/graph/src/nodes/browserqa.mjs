@@ -22,7 +22,7 @@ import path from 'node:path'
 import { tierFor } from '../lib/models.mjs'
 import { runClaude } from '../lib/agent.mjs'
 import { ensureApp } from '../lib/app.mjs'
-import { collectShots, saveEvidence, makeSlideshow } from '../lib/repro.mjs'
+import { collectShots, saveEvidence } from '../lib/repro.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
 import * as browsermcp from '../lib/browsermcp.mjs'
 
@@ -59,10 +59,11 @@ record what actually happens — that is the "before" a reviewer needs next to t
 2. If the scenario does not exist, build it. Where you may build depends on the org you are signed into:
    in the agent's OWN org (its name contains "QA Org", e.g. "JMartinez QA Org") the whole org is yours —
    create accounts and modules as the ticket's navigation names them (an "Asset Tracking" module with an
-   "Assets" collection, say), so later tickets find them again. In any other org, build ONLY inside the
-   module named "Panda Agent QA" (create it if missing) — qa is shared with the whole team. Either way use
-   the ticket's exact names, create the minimum (collections, fields, two or three records, the forms or
-   automations), then run step 1.
+   "Assets" collection, say), so later tickets find them again — but anything you CREATE goes inside a module
+   named "Agent ${s.issueKey}" (create it if missing), so two tickets running at the same time never touch each
+   other's data. In any other org, build ONLY inside "Agent ${s.issueKey}" — qa is shared with the whole team.
+   Either way use the ticket's exact names for what is inside, create the minimum (collections, fields, two or
+   three records, the forms or automations), then run step 1.
 3. Never delete or rename anything, anywhere.
 Caption each screenshot as what it shows today. \`status\` must be \`observed\` (a reproduction on the unpatched
 backend proves the bug, never the fix). You are NOT writing tests and you do NOT edit code.` : `You are doing BROWSER QA for ${s.issueKey}: confirm, in a real browser, that the bug the ticket reports
@@ -79,10 +80,8 @@ ${process.env.PAG_APP_EMAIL} — do not sign in again.
 Drive by SNAPSHOT, not by pixels: \`browser_snapshot\` gives you the live accessibility tree (real roles and
 names). Snapshot before you click, snapshot after to confirm the state changed. A SPA action resolves
 asynchronously — \`browser_wait_for\` the expected text instead of assuming it worked.
-RECORDING IS MANDATORY. Your first browser call is \`browser_start_video\` with
-{"filename":"${outDir}/qa.webm","size":{"width":1440,"height":900}} (load it with the other tools via ToolSearch:
-\`select:mcp__playwright__browser_start_video,mcp__playwright__browser_stop_video,mcp__playwright__browser_close,…\`).
-Your last two calls are \`browser_stop_video\` then \`browser_close\`. A run without qa.webm is a defective run.
+Do NOT record video (no \`browser_start_video\`): captioned screenshots are the evidence. Your last call is
+\`browser_close\`.
 If the browser is NOT signed in (a login form appears), that is a pipeline fault, not yours to fix: take one
 screenshot of it, write \`status: incomplete\` with the reason "browser was not signed in", and STOP. Never
 search the filesystem or environment for credentials, never read or run the pipeline's own scripts, never
@@ -151,7 +150,7 @@ user's role, never touch account or organisation settings beyond what the ticket
    ~10s, then re-navigate to the record and snapshot — do not spend turns polling.
 4. The last screenshot must show the acceptance criterion satisfied — or NOT satisfied, honestly.
 5. Check the immediately surrounding behaviour once (same screen, adjacent action) so a regression is caught.
-6. Set the final \`status\` and \`summary\`, then \`browser_stop_video\` and \`browser_close\`.
+6. Set the final \`status\` and \`summary\`, then \`browser_close\`.
 
 ## Budget
 About ${minutes} minutes. Aim for 3–8 screenshots. If the screen cannot be reached (missing data you cannot
@@ -257,12 +256,8 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
       const original = base.replace(/^after-(\d\d-)?/, (_, n) => n || '')
       return { file: base, caption: captions.get(base) || captions.get(original) || null, path: f }
     }).filter((x) => x.caption || !captions.size) // probe shots the model did not caption stay out once it captioned any
-    // The model is told to record video and sometimes does not. A walkthrough is still owed to the
-    // reviewer, so without a .webm the captioned screenshots become a slideshow gif — deterministic.
-    if (!got.video && !got.gif && shots.length >= 2) {
-      got.gif = await makeSlideshow(shots.map((x) => x.path), path.join(path.dirname(shots[0].path), 'after-walkthrough.gif'))
-      if (got.gif) onProgress('no video from the session — built a slideshow gif from the captioned screenshots')
-    }
+    // Screenshots are the evidence. Video/gif were dropped on purpose: a 30 MB webm per run that reviewers
+    // did not open, and the recording calls cost the model turns it needs for the steps themselves.
     for (const x of shots) delete x.path
     saveEvidence('qa-result.json', JSON.stringify(result, null, 2))
     let status = result.status || (r.timedOut ? 'incomplete' : shots.length ? 'incomplete' : 'no_output')
@@ -270,7 +265,7 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
     // (the backend was unreachable — WAF 403 from the GitHub runner) must not be relabelled
     // 'observed' just because screenshots of the failure exist.
     if (mode === 'observe' && shots.length && status !== 'incomplete') status = 'observed'
-    onProgress(`browser QA: ${status} — ${shots.length} screenshot(s), video ${got.video ? 'yes' : 'no'}, trace ${got.trace ? 'yes' : 'no'}`)
+    onProgress(`browser QA: ${status} — ${shots.length} screenshot(s), trace ${got.trace ? 'yes' : 'no'}`)
     return {
       qa: {
         status, summary: result.summary || '', unresolved: result.unresolvedIssues || [],
