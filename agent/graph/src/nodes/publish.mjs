@@ -39,6 +39,10 @@ Return JSON: {"title":str,"body":str,"testNotes":str,"rolloutNotes":str,"manualS
 - body: what was broken, the root cause in one or two sentences with file:line, and what changed.
   Every file:line you cite MUST be a file in the diff. State plainly what you did NOT do.
   Do not describe test evidence or how to verify — the workflow appends those from its own records.
+  End the body with a "### For the reviewer" section of three short parts, taken from the patch
+  session's own account when it gives them: **How it works** (plain English, no restating the diff),
+  **Alternatives considered** (each with why not; write "not stated by the patch session" rather than
+  inventing any), **Review first** (one or two file:line in the diff and what to look for).
 - testNotes: which tests were added and the exact condition each pins.
 - rolloutNotes: deploy/migration risk, or "none" if truly none.
 - manualSteps: 2-5 numbered steps a human follows in the product to confirm the fix, derived ONLY

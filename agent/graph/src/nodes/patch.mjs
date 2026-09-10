@@ -122,7 +122,17 @@ Read a specific file when the pack points you at one; do not sweep.
 
 Write the code and the tests. Run only the tests you just wrote, to confirm they pass. Do NOT run
 the repo-wide test suite (the workflow's verify step owns that, scoped), do not commit, and do not
-create or switch branches — the workflow owns git. Leave everything uncommitted in the working tree.`
+create or switch branches — the workflow owns git. Leave everything uncommitted in the working tree.
+
+## Your closing message — it becomes the reviewer's guide, so use exactly these headings
+### Root cause
+One or two sentences, with file:line, of what actually happens on the ticket's input.
+### Why this fix
+How the change works in plain English, and the alternatives you considered with one reason each for
+not taking them (a different layer, a broader refactor, a guard at the call site…). "None considered" is
+an acceptable answer only when the code offers no alternative — say so.
+### Review first
+The one or two file:line locations a reviewer should read first, and what to look for there.`
 
 /** What the reproducing test settled, so the fix targets the mechanism that was demonstrated. */
 function hypothesesBlock(s) {
