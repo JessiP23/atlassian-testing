@@ -90,6 +90,10 @@ jobs:
       options: --shm-size=2g
     env:
       AGENT_DIR: /opt/panda-agent/agent
+    # Container jobs default to `sh`; the steps use bash (`set -o pipefail`, arrays).
+    defaults:
+      run:
+        shell: bash
     steps:
       # The agent code comes from the image (built from the tag), not from a checkout — that is what
       # makes a run reproducible. The repo is checked out only so the workflow's own files are present.
