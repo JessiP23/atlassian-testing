@@ -22,6 +22,7 @@
 // methods — and the PR says so in its first line so the reviewer reads harder.
 
 import { execFile } from 'node:child_process'
+import { lintFiles, eslintCommand } from '../lib/lint.mjs'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -152,8 +153,9 @@ reproduction of anything; it is a test that the fix has not been written yet, an
 
 ## It must also pass this repo's lint
 The file is frozen the moment it goes red, so nothing can fix it afterwards — a lint error here
-stops the whole run at the gate. Before you finish, run \`npx eslint <the file>\` and clear
-anything it reports. In particular: import EXACTLY the way the nearest existing spec in this same
+stops the whole run at the gate. Before you finish, run exactly
+    ${eslintCommand(s.repo, [specFile]) || 'the project lint target'}
+and clear anything it reports (that is the command this repo needs — do not go looking for the eslint config). In particular: import EXACTLY the way the nearest existing spec in this same
 project imports, because a cross-package import the repo forbids fails
 \`@nx/enforce-module-boundaries\`, and do not start a line with a semicolon.
 ${previous ? `\n## Previous attempt\n${previous}\n` : ''}
@@ -420,11 +422,10 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
       // spec frozen one space off fails it with nothing downstream allowed to touch the file.
       // Deterministic and content-preserving, so the red run above still describes this file.
       await exec('npx', ['--no-install', 'prettier', '--write', '--log-level', 'silent', specFile], { cwd: s.repo, timeout: 60_000 }).catch(() => {})
-      const lint = await exec('npx', ['eslint', '--no-error-on-unmatched-pattern', specFile], { cwd: s.repo, maxBuffer: 1 << 24, timeout: 120_000 })
-        .then(() => ({ ok: true, out: '' }))
-        .catch((e) => ({ ok: false, out: `${e.stdout || ''}${e.stderr || ''}` }))
-      if (!lint.ok) {
-        const problems = parseGateFailures(lint.out, 'lint').filter((f) => specFile.endsWith(f.file) || f.file.endsWith(path.basename(specFile)))
+      const lint = await lintFiles(s.repo, [specFile])
+      if (lint.configError) onProgress(`repro lint could not run (${lint.configError}) — freezing anyway; the gate will judge it`)
+      if (!lint.ok && !lint.configError) {
+        const problems = lint.problems
         if (problems.length) {
           onProgress(`repro is red but fails the repo's lint (${problems.map((f) => f.rule).filter(Boolean).join(', ')}) — a frozen file cannot be fixed later, so fixing it now`)
           previous = `Attempt ${attempt}: the test correctly FAILED, which is right — but it does not pass this repo's lint, and once frozen nobody can fix it:\n\n${formatFailures(problems)}\n\n`

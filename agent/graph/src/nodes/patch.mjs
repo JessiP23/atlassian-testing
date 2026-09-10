@@ -25,6 +25,7 @@
 //   * `--strict-mcp-config` — the agent gets exactly the tools this phase needs and nothing else.
 
 import { execFile } from 'node:child_process'
+import { eslintCommand } from '../lib/lint.mjs'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -96,7 +97,8 @@ ${s.repro.redExcerpt || ''}
 ${ctxPrior(s)}
 ## Order of work — the wall clock kills this session, unfinished work is carried forward as-is
 1. The product fix, in the allowed files. 2. Make the reproducing test pass. 3. ONE focused test
-of your own if the plan lists one. 4. \`npx eslint\` on the files you touched. Then stop. Do not
+of your own if the plan lists one. 4. lint the files you touched with exactly \`${eslintCommand(s.repo) || 'the project lint target'}\`
+(that is the command this repo needs — do not go looking for the eslint config). Then stop. Do not
 write more test files than the plan lists — a run died at the deadline writing its third.
 Research is bounded: if after ~15 tool calls you have not made an edit, either edit the most likely
 site or write \`.pag/escalate.txt\` naming the file the fix belongs in and stop — never keep reading.

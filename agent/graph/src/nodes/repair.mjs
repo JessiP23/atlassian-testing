@@ -20,6 +20,7 @@
 // to on the fourth; it is going to start deleting assertions. Escalate to a human instead.
 
 import fs from 'node:fs'
+import { eslintCommand } from '../lib/lint.mjs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -67,7 +68,7 @@ ${s.repro?.status === 'red' ? `- \`${s.repro.file}\` is the frozen reproducing t
 - The gate runs the repo's prettier on every changed file BEFORE lint. A lint fix that prettier
   undoes is not a fix (ESI2-3194 r11 paid twice for a leading \`;\` that prettier kept re-inserting).
   So: after editing, run \`npx prettier --write <the files you touched>\`, THEN the lint target
-  (\`npx nx run <project>:lint\`), and only report done when lint is clean on the formatted file.
+  (\`${eslintCommand(s.repo) || 'npx nx run <project>:lint'}\` — that is the command this repo needs), and only report done when lint is clean on the formatted file.
   If prettier and eslint disagree on a construct, restructure the code so neither complains
   (e.g. assign to a const instead of starting a statement with \`(\`).
 - You have ${Math.round(budgetMs / 1000)}s of wall clock. The run has a hard ${maxMinutes}-minute
