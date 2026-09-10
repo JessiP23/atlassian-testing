@@ -24,6 +24,7 @@
 // instead of blowing the 20-minute budget. tsc --noEmit already covers most of what it would catch.
 
 import { execFile } from 'node:child_process'
+import { scanRedFlags, describeRedFlags } from '../lib/redflags.mjs'
 import { promisify } from 'node:util'
 import { scopeFor, commandsFor } from '../lib/scope.mjs'
 import { verdict, summarise } from '../lib/baseline.mjs'
@@ -68,6 +69,24 @@ export function verifyNode({ budget, onProgress = () => {} } = {}) {
           try { return `\n--- NEW FILE: ${f}\n${fs.readFileSync(path.join(s.repo, f), 'utf8')}` } catch { return '' }
         }))
       const scan = scanDiff(full + untrackedBodies.join(''))
+      // (0b) Escape hatches in the added product lines — `any`, forced casts, silenced errors, TODOs.
+      // Not a refusal: a gate failure, so repair sees the exact lines and the model re-thinks the
+      // shape of the fix instead of shipping the workaround. Tests and the frozen repro are exempt.
+      // Off with PAG_RED_FLAGS=0 for a repo that has decided otherwise.
+      if (process.env.PAG_RED_FLAGS !== '0') {
+        const flags = scanRedFlags(full + untrackedBodies.join(''), { exempt: [s.repro?.file].filter(Boolean) })
+        if (flags.length) {
+          onProgress(`${flags.length} design red flag(s) in added lines — sending back to repair: ${flags.map((f) => f.kind).join(', ')}`)
+          return {
+            gate: {
+              ok: false, target: 'quality',
+              summary: `${flags.length} escape hatch(es) in the added code: ${[...new Set(flags.map((f) => f.kind))].join(', ')} — fix the design, do not silence the checker`,
+              newFailures: [], preExisting: [], failures: [],
+              logTail: `Each of these is the code admitting the fix does not fit. Remove the escape hatch by fixing the types or the design; if a cast is truly unavoidable, say why in one comment on that line and use a precise type, not any.\n\n${describeRedFlags(flags)}`,
+            },
+          }
+        }
+      }
       if (!scan.ok) {
         onProgress(`SECRET-SHAPED CONTENT in ${scan.findings.length} added line(s) — refusing`)
         return {
