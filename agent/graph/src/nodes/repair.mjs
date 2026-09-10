@@ -103,6 +103,19 @@ export function repairNode({ budget, onProgress = () => {} }) {
     })
     budget.charge('repair', cost, { model: tier.model, attempt: attempts, exit: code })
 
+    // The session was told: if the failures cannot be fixed within the allowed files, say so in
+    // .pag/escalate.txt and stop. When it does, believe it the FIRST time. ESI2-3434 said it clearly
+    // on attempt 1 ("the reported failures aren't fixable from the allowed files") and was sent back
+    // twice more to say it again, $0.65 each. One more verify (the gate may attribute differently now),
+    // then hand over with the session's own explanation.
+    const escalatePath = path.join(s.repo, '.pag', 'escalate.txt')
+    if (fs.existsSync(escalatePath)) {
+      const text = fs.readFileSync(escalatePath, 'utf8').trim().slice(0, 4000)
+      fs.rmSync(escalatePath, { force: true })
+      onProgress(`repair says these failures cannot be fixed from the allowed files — no further repair attempts; handing over after one more gate run`)
+      return { attempts: MAX_REPAIR_ATTEMPTS, repairEscalation: text }
+    }
+
     // Format here too, so what verify lints is exactly what the model last saw. A style fix that
     // survives this pass is real; one that does not is caught now, in the log, not at the next gate.
     const toFormat = (s.changed || []).filter((f) => f !== s.repro?.file && fs.existsSync(path.join(s.repo, f)))

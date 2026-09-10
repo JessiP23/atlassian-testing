@@ -27,7 +27,7 @@ import { execFile } from 'node:child_process'
 import { scanRedFlags, describeRedFlags } from '../lib/redflags.mjs'
 import { promisify } from 'node:util'
 import { scopeFor, commandsFor } from '../lib/scope.mjs'
-import { verdict, summarise } from '../lib/baseline.mjs'
+import { verdict, summarise, parseFailures, parseFailedTasks } from '../lib/baseline.mjs'
 import * as snap from '../lib/snapshot.mjs'
 import { runSpec, sha256, saveEvidence, excerpt } from '../lib/repro.mjs'
 import { stopApp } from '../lib/app.mjs'
@@ -46,6 +46,45 @@ async function run(repo, argv, timeoutMs) {
     return { ok: true, out: stdout + stderr }
   } catch (e) {
     return { ok: false, out: `${e.stdout || ''}${e.stderr || ''}${e.killed ? '\n[TIMED OUT]' : ''}` }
+  }
+}
+
+/**
+ * Run one gate target on the CLEAN base tree — the working tree's changes (tracked and untracked, the
+ * frozen repro spec included) are stashed for the duration and restored whatever happens — and record
+ * what fails there as this run's baseline for those projects. Returns null when the tree could not be
+ * stashed or restored cleanly, so the caller falls back to "cannot attribute" instead of guessing.
+ */
+async function baselineOnDemand(s, { target, projects, argv, timeoutMs, onProgress }) {
+  if (!argv?.length || !projects.length) return null
+  const git = (args) => exec('git', args, { cwd: s.repo, maxBuffer: 1 << 24 })
+  let stashed = false
+  try {
+    const { stdout: before } = await git(['stash', 'list'])
+    await git(['stash', 'push', '--include-untracked', '--quiet', '-m', `pag-baseline-${s.issueKey}`])
+    const { stdout: after } = await git(['stash', 'list'])
+    stashed = after.trim() !== before.trim()
+    if (!stashed) return null
+    onProgress(`baseline on demand: running ${target} for ${projects.join(', ')} on clean ${String(s.baseSha).slice(0, 7)} (working tree stashed)`)
+    const t0 = Date.now()
+    const r = await run(s.repo, argv, timeoutMs)
+    const tests = parseFailures(r.out)
+    const tasks = new Set([...parseFailedTasks(r.out)].filter((id) => projects.includes(id.split(':')[0])))
+    if (!r.ok && !tasks.size) for (const p of projects) tasks.add(`${p}:${target}`)
+    for (const p of projects) snap.writeProject(p, { sha: s.baseSha, failed: [...tasks].some((id) => id.startsWith(`${p}:`)), tasks: [...tasks].filter((id) => id.startsWith(`${p}:`)), tests: [...tests] })
+    onProgress(`baseline on demand: ${((Date.now() - t0) / 1000).toFixed(0)}s — ${tasks.size ? `already failing on base: ${[...tasks].join(', ')}` : 'green on base'}`)
+    return { tests, tasks }
+  } catch (e) {
+    onProgress(`baseline on demand skipped: ${String(e.message).split('\n')[0].slice(0, 100)}`)
+    return null
+  } finally {
+    if (stashed) {
+      try { await git(['stash', 'pop', '--quiet']) } catch (e) {
+        // Never leave the patch in the stash: a pop that failed on a conflict is still recoverable by hand,
+        // but the run must know. Surface loudly; the caller's diff-based commit will show what is missing.
+        onProgress(`baseline on demand: could not restore the working tree (${String(e.message).split('\n')[0].slice(0, 80)}) — run \`git stash pop\` in the worktree`)
+      }
+    }
   }
 }
 
@@ -262,6 +301,24 @@ export function verifyNode({ budget, onProgress = () => {} } = {}) {
       const regressions = (v.newTasks || []).filter((t) => !unknownSet.has(t.split(':')[0]))
 
       if (!regressions.length && !v.newFailures.length && unattributable.length) {
+        // BASELINE ON DEMAND. The only honest way to attribute a failure in a never-baselined project
+        // is to run the same target on the clean base tree and compare. That is one test run and $0;
+        // the alternative was three repair rounds ($1.31 on ESI2-3434) arguing with failures the patch
+        // never caused, and an INCOMPLETE PR over a fix that was right.
+        const basis = await baselineOnDemand(s, { target, projects: unattributable.map((t) => t.split(':')[0]), argv: results.find((r) => r.target === target)?.argv, timeoutMs: slice(), onProgress })
+        if (basis) {
+          const v2 = verdict(out, basis.tests, basis.tasks)
+          const stillNew = [...(v2.newTasks || []), ...(v2.newFailures || [])]
+          if (!stillNew.length) {
+            onProgress(`gate ${target}: ${unattributable.join(', ')} fails the same way on clean ${String(s.baseSha).slice(0, 7)} — pre-existing, not this patch`)
+            continue
+          }
+          onProgress(`gate ${target}: ${stillNew.length} failure(s) NOT present on clean ${String(s.baseSha).slice(0, 7)} — this patch caused them`)
+          return {
+            scope, evidence,
+            gate: { ok: false, target, summary: summarise({ ...v2, attributable: true }, s.baseSha), newFailures: v2.newFailures, newTasks: v2.newTasks, preExisting: v2.preExisting, failures, skipped, logTail: out.slice(-8000) },
+          }
+        }
         return {
           scope, evidence,
           gate: {

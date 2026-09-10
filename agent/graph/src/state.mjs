@@ -73,6 +73,7 @@ export const S = Annotation.Root({
   // to finish is worth more than a Jira comment with a log tail. See lib/budget.mjs.
   incomplete: last(),        // { reason, at }
   outOfTime: last(),         // repair setting this means "not enough clock to try", not "failed"
+  repairEscalation: last(),  // repair's own words when the failures are not fixable from the allowed files
   secrets: last(),           // findings from lib/secrets.mjs when the diff carried a credential
 
   // ---- control ------------------------------------------------------------------------------

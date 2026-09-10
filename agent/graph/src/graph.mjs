@@ -190,6 +190,8 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     const reason = onlyFrozenFileFails(s)
       ? `Every remaining gate failure is inside the frozen reproducing test, which no step may edit — `
         + `the product fix itself is green. Clear the lint on that test, or delete it, and the gate passes.`
+      : s.repairEscalation
+      ? `The repair step read the remaining failures and concluded they cannot be fixed from the files this ticket is allowed to change. Its explanation:\n\n${s.repairEscalation}`
       : (s.attempts ?? 0) >= MAX_REPAIR_ATTEMPTS && left > 60
       ? `It used all ${MAX_REPAIR_ATTEMPTS} repair attempts and the gate is still red.`
       : `It reached the ${budget.maxMinutes}-minute deadline with ${left}s left — not enough to attempt another fix and still publish.`
