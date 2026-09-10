@@ -56,7 +56,7 @@ ${(s.plan.steps || []).map((a, i) => `${i + 1}. ${a}`).join('\n')}
 
 ## Files you may edit — this list is enforced mechanically
 ${s.plan.impactedFiles.map((f) => `- ${f}`).join('\n')}
-
+${hypothesesBlock(s)}
 Editing any other path will cause this run to be rejected and reverted.
 
 If the fix genuinely requires a file not on this list, do NOT edit it and do NOT implement a
@@ -123,6 +123,21 @@ Read a specific file when the pack points you at one; do not sweep.
 Write the code and the tests. Run only the tests you just wrote, to confirm they pass. Do NOT run
 the repo-wide test suite (the workflow's verify step owns that, scoped), do not commit, and do not
 create or switch branches — the workflow owns git. Leave everything uncommitted in the working tree.`
+
+/** What the reproducing test settled, so the fix targets the mechanism that was demonstrated. */
+function hypothesesBlock(s) {
+  const hs = s.plan?.hypotheses || []
+  if (!hs.length) return ''
+  const held = hs.filter((h) => h.verdict === 'confirmed')
+  const out = hs.filter((h) => h.verdict === 'rejected')
+  const open = hs.filter((h) => !h.verdict)
+  return `
+## Which explanation the evidence supports
+${held.length ? held.map((h) => `- ${h.id} HELD — ${h.statement} (${h.evidence || 'the reproducing test goes red on this mechanism'}). Fix THIS.`).join('\n') : '- none demonstrated yet: the plan\'s H1 is the working assumption, and the reproducing test is the evidence to make pass.'}
+${out.map((h) => `- ${h.id} ruled out — ${h.statement}. Do not change code for it.`).join('\n')}
+${open.map((h) => `- ${h.id} open [${h.checkable}] — ${h.statement}. Needs: ${h.check || 'data the run does not have'}. Do NOT fix it speculatively; the PR names it for a human.`).join('\n')}
+`
+}
 
 /**
  * The newest earlier run on this ticket that left a diff: its product hunks and what became of it.

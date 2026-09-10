@@ -51,6 +51,27 @@ const attemptsFor = (budget) => (budget.phaseTimeFor('reproduce', 1) >= 2 * MIN_
 const attemptShare = (budget, attempt, attempts = ATTEMPTS) => budget.phaseTimeFor('reproduce', attempts - attempt + 1)
 
 
+/**
+ * Read `REPRO: red H2 ruled-out: H1, H3` from the session's closing text and stamp verdicts on the
+ * plan's hypotheses. A red with no id names H1 (the test was told to start there). Ids the plan does
+ * not know are ignored; a "data"/"browser" hypothesis can never be held by a unit test.
+ */
+export function hypothesisVerdicts(hypotheses, text, specFile) {
+  if (!hypotheses?.length) return { held: null, hypotheses: null, note: '' }
+  const line = (String(text || '').match(/REPRO:\s*red[^\n]*/i) || [''])[0]
+  const heldId = (line.match(/red\s+(H\d+)/i) || [])[1]?.toUpperCase() || 'H1'
+  const ruled = [...line.matchAll(/ruled-?out:?\s*((?:H\d+[,\s]*)+)/gi)].flatMap((m) => m[1].match(/H\d+/gi) || []).map((x) => x.toUpperCase())
+  const ids = new Set(hypotheses.map((h) => h.id))
+  const held = ids.has(heldId) && hypotheses.find((h) => h.id === heldId).checkable === 'test' ? heldId : null
+  const out = hypotheses.map((h) => {
+    if (h.id === held) return { ...h, verdict: 'confirmed', evidence: `${specFile} fails on the unpatched code with this mechanism` }
+    if (ruled.includes(h.id) && h.checkable === 'test') return { ...h, verdict: 'rejected', evidence: 'its check passed on the unpatched code' }
+    return h
+  })
+  const note = held ? `hypothesis ${held} held${ruled.length ? `; ruled out ${ruled.filter((x) => ids.has(x)).join(', ')}` : ''}` : 'red test did not name a plan hypothesis'
+  return { held, hypotheses: out, note }
+}
+
 const PROMPT = (s, { specFile, cmd, rung, previous }) => `You are writing a REPRODUCING TEST for ${s.issueKey} in the worktree at ${s.repo}.
 You are NOT fixing the bug. The code stays exactly as it is; you add one test file that proves the
 bug exists. A separate step will fix the code afterwards and your test must then pass unchanged.
@@ -69,7 +90,15 @@ ${(s.spec.acceptanceCriteria || []).map((a, i) => `${i + 1}. ${a}`).join('\n')}
 
 ## Where the plan says the fix will go (read these to know what to exercise)
 ${s.plan.impactedFiles.map((f) => `- ${f}`).join('\n')}
-
+${(s.plan.hypotheses || []).length ? `
+## Competing explanations — your test decides between them
+${s.plan.hypotheses.map((h) => `- ${h.id} [${h.checkable}]: ${h.statement}\n    check: ${h.check}`).join('\n')}
+Encode the FIRST hypothesis whose checkable is "test" as your test. If its check PASSES on the unpatched
+code (the mechanism is not what happens), that hypothesis is ruled out: move to the next "test" one and
+say so. Never write a test for a "data" or "browser" hypothesis — you do not have what it needs.
+Your final line names the outcome: \`REPRO: red H2\` (H2's check went red), and if you ruled any out,
+add \`ruled-out: H1\` on the same line, e.g. \`REPRO: red H2 ruled-out: H1\`.
+` : ''}
 ## The plan can be wrong, and you are the first step that reads the code
 Before writing anything, trace how THESE files produce the symptom on THAT screen for THOSE values.
 If they do not — the error text is built elsewhere, the values never reach this code, the screen is
@@ -397,8 +426,13 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
       saveEvidence('repro-red.log', red.out)
       const redExcerpt = excerpt(red.out)
       onProgress(`repro RED on ${String(s.baseSha).slice(0, 7)}: ${specFile}`)
+      // Which explanation did the red settle? The model's closing line names it; the runner's red is
+      // what makes the verdict count. Nothing in the plan changes except the verdicts.
+      const verdicts = hypothesisVerdicts(s.plan?.hypotheses, r.text, specFile)
+      if (verdicts.note) onProgress(verdicts.note)
       return {
-        repro: { status: 'red', file: specFile, sha, rung, cmd: red.cmd, redExcerpt, attempts: attempt },
+        repro: { status: 'red', file: specFile, sha, rung, cmd: red.cmd, redExcerpt, attempts: attempt, hypothesis: verdicts.held },
+        ...(verdicts.hypotheses ? { plan: { ...s.plan, hypotheses: verdicts.hypotheses } } : {}),
       }
     }
     return { repro: { status: 'none', reason: previous || 'exhausted attempts', rung } }

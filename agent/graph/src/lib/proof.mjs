@@ -51,7 +51,7 @@ export function proofFromState(s) {
   for (const h of s.plan?.hypotheses || []) {
     if (h.verdict === 'confirmed') confirmed.push({ claim: `Hypothesis held: ${h.statement}`, source: h.evidence || 'reproducing test' })
     else if (h.verdict === 'rejected') inferred.push({ claim: `Ruled out: ${h.statement}`, basis: h.evidence || 'its check did not reproduce the symptom' })
-    else unverified.push({ claim: `Not ruled in or out: ${h.statement}`, how: h.check || 'needs data the run did not have' })
+    else if (h.checkable !== 'test' || s.repro?.status !== 'red') unverified.push({ claim: `Not ruled in or out: ${h.statement}`, how: h.check || 'needs data the run did not have' })
   }
 
   // ---- the browser --------------------------------------------------------------------------------

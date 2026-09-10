@@ -31,8 +31,19 @@ Hard rules:
 - If satisfying the criteria genuinely needs more than the stated file/line budget, do not pad the
   plan — set needsEscalation true and explain.
 
+Hypotheses before files. A bug report describes a SYMPTOM; the code usually offers two or three
+distinct mechanisms that could produce it. Name them in hypotheses, most likely first, each with:
+- statement: the mechanism, in one sentence, naming the function or branch involved;
+- check: the concrete input and assertion that would tell this hypothesis apart from the others;
+- checkable: "test" if a unit test at this level can run that check on this repo; "browser" if only a
+  running app can; "data" if it needs the customer's configuration or data that the ticket does not
+  contain (say what is missing). Do NOT call a check "test" when it really needs the customer's data.
+impactedFiles serves H1; the reproducing test runs H1's check first and moves to H2 if H1 does not
+reproduce. A single hypothesis is allowed only when the code offers no alternative — say so in steps.
+
 Return JSON:
-{"impactedFiles":[str],"steps":[str],"newTests":[{"file":str,"pins":str}],
+{"hypotheses":[{"id":"H1","statement":str,"check":str,"checkable":"test"|"browser"|"data"}],
+ "impactedFiles":[str],"steps":[str],"newTests":[{"file":str,"pins":str}],
  "migrationNotes":str,"needsEscalation":bool,"escalationReason":str}`
 
 export function planNode({ budget, onProgress = () => {} }) {
@@ -167,6 +178,15 @@ export function planNode({ budget, onProgress = () => {} }) {
     if (data.impactedFiles.length > DIFF_LIMITS.maxFiles) {
       return { plan: data, refusal: { at: 'plan', reason: 'plan_too_wide', detail: `${data.impactedFiles.length} production files exceeds the ${DIFF_LIMITS.maxFiles} cap — the root cause was not isolated` } }
     }
+    // Hypotheses: bounded, well-formed, ids normalised. A re-plan keeps the earlier verdicts.
+    const prior = new Map((s.plan?.hypotheses || []).map((h) => [h.statement, h]))
+    data.hypotheses = (Array.isArray(data.hypotheses) ? data.hypotheses : [])
+      .filter((h) => h && h.statement).slice(0, 4)
+      .map((h, i) => ({ id: `H${i + 1}`, statement: String(h.statement).slice(0, 300), check: String(h.check || '').slice(0, 300),
+        checkable: ['test', 'browser', 'data'].includes(h.checkable) ? h.checkable : 'test',
+        ...(prior.get(h.statement)?.verdict ? { verdict: prior.get(h.statement).verdict, evidence: prior.get(h.statement).evidence } : {}) }))
+    if (data.hypotheses.length) onProgress(`${data.hypotheses.length} hypothesis(es): ${data.hypotheses.map((h) => `${h.id} [${h.checkable}]`).join(', ')}`)
+
     // Clear the escalation so the next patch attempt starts clean, and count the re-plan.
     return { plan: data, escalation: null, replans: (s.replans ?? 0) + (esc ? 1 : 0) }
   }
