@@ -13,6 +13,8 @@ name: Pioneer — ESI ticket to PR (with evidence)
 #   headers: Authorization: Bearer <PAT with repo scope> (hidden) · Accept: application/vnd.github+json
 #   body:    {"event_type":"pioneer-ticket","client_payload":{"issue_key":"{{issue.key}}"}}
 
+run-name: ${{ github.event.client_payload.issue_key || inputs.issue_key }}${{ inputs.image_tag && format(' · image {0}', inputs.image_tag) || '' }}
+
 on:
   repository_dispatch:
     types: [pioneer-ticket]
