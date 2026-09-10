@@ -52,7 +52,11 @@ RUN npm install -g --no-audit --no-fund \
 # The agent itself, from this checkout (the build workflow checks out the tag).
 WORKDIR /opt/panda-agent
 COPY agent/ ./agent/
-RUN cd agent/graph && npm ci --no-audit --no-fund && npm test
+# The graph's own Playwright (login-state.mjs, termshot) must be the SAME version as the MCP's, or it looks
+# for a Chromium revision that is not in /ms-playwright and every sign-in fails in one second.
+RUN cd agent/graph && npm ci --no-audit --no-fund \
+    && node -e "const v=require('playwright/package.json').version; if (v!=='${PLAYWRIGHT_VERSION}') { console.error('graph pins playwright '+v+', image pins ${PLAYWRIGHT_VERSION} — align package.json'); process.exit(1) }" \
+    && npm test
 
 # Xvfb is started by the entrypoint so every process in the job — the MCP's Chromium included — has a screen.
 COPY agent/docker/entrypoint.sh /usr/local/bin/panda-entrypoint

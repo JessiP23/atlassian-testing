@@ -36,7 +36,9 @@ if (!answering) {
   started = true
 }
 
-const browser = await chromium.launch()
+// Headed when a display exists (the panda-agent image runs Xvfb): qa's WAF rejects the HeadlessChrome
+// signature, and the state baked here is the one the headed QA browser will present. No display → headless.
+const browser = await chromium.launch({ headless: !process.env.DISPLAY })
 const context = await browser.newContext({ baseURL: url, viewport: { width: 1440, height: 900 } })
 const page = await context.newPage()
 // Print Cognito's own answer. The app swallows sign-in errors into store state and shows nothing, so

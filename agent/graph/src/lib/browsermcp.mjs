@@ -42,7 +42,13 @@ export function loginState({ appUrl, onProgress = () => {} }) {
   statePromise = exec('node', [path.join(GRAPH_DIR, 'bin', 'login-state.mjs'), '--url', appUrl, '--out', out],
     { cwd: GRAPH_DIR, timeout: 120_000 })
     .then(() => { onProgress('authoring browser: signed in, state cached'); return out })
-    .catch((e) => { onProgress(`authoring browser: could not sign in (${String(e.message).split('\n')[0].slice(0, 90)}) — it will explore signed out`); return null })
+    .catch((e) => {
+      // The script prints WHY on stderr (Cognito's answer, a missing browser binary, unset credentials);
+      // the exec error itself only says "Command failed". Surface the last real line.
+      const why = String(e.stderr || '').trim().split('\n').filter(Boolean).pop() || String(e.message).split('\n')[0]
+      onProgress(`authoring browser: could not sign in — ${why.slice(0, 200)} — it will explore signed out`)
+      return null
+    })
   return statePromise
 }
 
