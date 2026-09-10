@@ -78,7 +78,20 @@ export function afterReproduce(s) {
     const canRetry = s.escalation.neededFiles?.length && (s.replans ?? 0) < MAX_REPLANS
     return canRetry ? 'planning' : 'refuse'
   }
-  return s.refusal ? 'refuse' : 'patch'
+  if (s.refusal) return 'refuse'
+  // NO PATCH WITHOUT EVIDENCE. A red test is not mandatory — some symptoms cannot be pinned at unit
+  // level — but when the plan offered testable explanations and reproduce refuted EVERY one of them,
+  // what remains needs data the run does not have (the customer's configuration, a live session).
+  // Patching then is a guess dressed as a fix (ESI2-3441: H1 ruled out, patch changed the H1 code
+  // anyway, QA spent $8 building a scenario it could not judge). The useful output is the analysis.
+  if (s.repro?.status === 'none' && noTestableExplanationLeft(s.plan?.hypotheses)) return 'refuse'
+  return 'patch'
+}
+
+export function noTestableExplanationLeft(hypotheses) {
+  const hs = hypotheses || []
+  const testable = hs.filter((h) => h.checkable === 'test')
+  return hs.length > 0 && testable.length > 0 && testable.every((h) => h.verdict === 'rejected')
 }
 
 // Whether a red gate is worth another repair attempt, or whether it is time to hand the work to a
@@ -152,9 +165,21 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     // it escalates, so the fallback below would otherwise claim the gate never passed).
     // Say what actually happened: were the named files already in a plan (then this is a second
     // escalation on the same files), or did the run simply have no re-plan left / no file to act on?
+    const noEvidence = !s.refusal && !s.escalation && s.repro?.status === 'none' && noTestableExplanationLeft(s.plan?.hypotheses)
     const named = s.escalation?.neededFiles || []
     const alreadyPlanned = named.length && named.every((f) => (s.plan?.impactedFiles || []).includes(f))
     const r = s.refusal
+      || (noEvidence && {
+        at: 'reproduce',
+        reason: 'needs_data',
+        detail: [
+          'Every explanation the code offered was checked and ruled out; what is left cannot be decided from the repository alone. No fix was attempted, because a patch here would be a guess.',
+          '',
+          ...(s.plan?.hypotheses || []).map((h) => `- ${h.id} ${h.verdict === 'rejected' ? 'RULED OUT' : `OPEN [${h.checkable}]`} — ${h.statement}${h.verdict === 'rejected' ? `\n    ${h.evidence || ''}` : `\n    To decide it: ${h.check || 'needs data the run did not have'}`}`),
+          '',
+          `Reproduce step's own words: ${s.repro?.reason || ''}`,
+        ].join('\n'),
+      })
       || (s.escalation && {
         at: s.escalation.from || 'patch',
         reason: alreadyPlanned ? 'escalated_after_replan' : named.length ? 'replan_budget_exhausted' : 'escalated_no_target',

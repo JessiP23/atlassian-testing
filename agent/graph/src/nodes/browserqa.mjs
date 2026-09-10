@@ -28,6 +28,11 @@ import * as browsermcp from '../lib/browsermcp.mjs'
 
 const UI_EVIDENCE = process.env.PAG_UI_EVIDENCE === '1'
 const QA_BUDGET_USD = Number(process.env.PAG_QA_BUDGET || 8) // $4 bought ~6 min of Opus driving a browser: enough to verify, never to build
+// Observe mode (shared backend, fix not deployed) can only capture the BEFORE state. That is context for a
+// reviewer, never proof, so it gets a small, fixed slice: 3437 and 3441 spent $7–8 each building scenarios
+// from scratch that could not judge anything. Verify mode (a deployed backend) keeps the full budget.
+const OBSERVE_BUDGET_USD = Number(process.env.PAG_QA_OBSERVE_BUDGET || 2.5)
+const OBSERVE_MINUTES = Number(process.env.PAG_QA_OBSERVE_MINUTES || 6)
 const real = (v) => { const x = String(v ?? '').trim(); return x && !/[<>]/.test(x) && !/^(your|todo|changeme|xxx)/i.test(x) ? x : '' }
 const HAS_LOGIN = () => Boolean(real(process.env.PAG_APP_EMAIL) && real(process.env.PAG_APP_PASSWORD))
 
@@ -56,7 +61,11 @@ record what actually happens — that is the "before" a reviewer needs next to t
    the records, and screenshot the outcome — the field that should have changed, and the Activity tab showing
    who changed what. If the outcome matches the ticket's complaint, say so: "reproduced on qa today". If the
    chain actually completes on qa, say THAT plainly — it is a finding, not a failure of yours.
-2. If the scenario does not exist, build it. Where you may build depends on the org you are signed into:
+2. If the scenario does not exist, build only what fits your budget (about ${minutes} minutes): a scenario that
+   needs more than a module, one collection with two or three fields, one form or automation and two records is
+   NOT worth building here — you cannot see the fix on this backend anyway. In that case screenshot the ticket's
+   screens as they are (the empty state included), say plainly in \`summary\` what a human would need to set up,
+   and set status \`observed\`. Where you may build depends on the org you are signed into:
    in the agent's OWN org (its name contains "QA Org", e.g. "JMartinez QA Org") the whole org is yours —
    create accounts and modules as the ticket's navigation names them (an "Asset Tracking" module with an
    "Assets" collection, say), so later tickets find them again — but anything you CREATE goes inside a module
@@ -228,12 +237,15 @@ export function browserQaNode({ budget, onProgress = () => {} }) {
     const resultFile = path.join(outDir, 'qa-result.json')
     const ticketShots = (s.ticketShots || []).map((t) => path.join(runDir, 'evidence', t.file))
     const tier = tierFor('repro')
-    const minutes = Math.floor(timeMs / 60_000)
+    const observe = mode === 'observe'
+    const spendMs = observe ? Math.min(timeMs, OBSERVE_MINUTES * 60_000) : timeMs
+    const spendUsd = observe ? Math.min(OBSERVE_BUDGET_USD, budget.availableFor('repro')) : Math.min(QA_BUDGET_USD, budget.availableFor('repro'))
+    const minutes = Math.floor(spendMs / 60_000)
     onProgress(`browser QA (${mode}${mode === 'observe' ? ': backend fix, not deployed here — capturing the ticket\'s screens as they are on qa' : ''}): ${minutes} min, signed in as ${process.env.PAG_APP_EMAIL}, ${ticketShots.length} ticket screenshot(s) to read`)
 
     const sessionStart = Date.now() - 5_000
     const r = await runClaude({
-      cwd: s.repo, model: tier.model, budgetUsd: Math.min(QA_BUDGET_USD, budget.availableFor('repro')), timeoutMs: timeMs,
+      cwd: s.repo, model: tier.model, budgetUsd: spendUsd, timeoutMs: spendMs,
       onProgress, mcpConfig,
       prompt: PROMPT(s, { appUrl: app.url, outDir, resultFile, ticketShots, routes: appRoutes(profile), minutes, mode }),
     })

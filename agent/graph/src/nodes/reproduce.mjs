@@ -72,6 +72,16 @@ export function hypothesisVerdicts(hypotheses, text, specFile) {
   return { held, hypotheses: out, note }
 }
 
+/** `REPRO: none … ruled-out: H1, H3` — stamp the test-checkable hypotheses the investigation refuted. */
+export function ruledOutVerdicts(hypotheses, text) {
+  if (!hypotheses?.length) return { hypotheses: null, note: '' }
+  const ruled = [...String(text || '').matchAll(/ruled-?out:?\s*((?:H\d+[,\s]*)+)/gi)].flatMap((m) => m[1].match(/H\d+/gi) || []).map((x) => x.toUpperCase())
+  if (!ruled.length) return { hypotheses: null, note: '' }
+  const out = hypotheses.map((h) => ruled.includes(h.id) && h.checkable === 'test' && !h.verdict
+    ? { ...h, verdict: 'rejected', evidence: 'the reproduce step traced the code and found this mechanism cannot produce the symptom on this commit' } : h)
+  return { hypotheses: out, note: `ruled out ${ruled.filter((id) => hypotheses.some((h) => h.id === id)).join(', ')} without a red test` }
+}
+
 const PROMPT = (s, { specFile, cmd, rung, previous }) => `You are writing a REPRODUCING TEST for ${s.issueKey} in the worktree at ${s.repo}.
 You are NOT fixing the bug. The code stays exactly as it is; you add one test file that proves the
 bug exists. A separate step will fix the code afterwards and your test must then pass unchanged.
@@ -309,7 +319,13 @@ export function reproduceNode({ budget, onProgress = () => {} }) {
         }
         const said = (r.text.match(/REPRO:\s*none\s*(.*)/i) || [])[1] || 'no test file was written'
         previous = `Attempt ${attempt} wrote no file. It said: ${said}`
-        if (/REPRO:\s*none/i.test(r.text) || r.timedOut) return { repro: { status: 'none', reason: said.trim(), rung, cost: r.cost } }
+        if (/REPRO:\s*none/i.test(r.text) || r.timedOut) {
+          // What did the investigation settle? "ruled-out: H1" on the closing line is a verdict, and it
+          // decides (graph.mjs) whether a patch without a red test is still warranted.
+          const verdicts = ruledOutVerdicts(s.plan?.hypotheses, r.text)
+          if (verdicts.note) onProgress(verdicts.note)
+          return { repro: { status: 'none', reason: said.trim(), rung, cost: r.cost }, ...(verdicts.hypotheses ? { plan: { ...s.plan, hypotheses: verdicts.hypotheses } } : {}) }
+        }
         continue
       }
 
