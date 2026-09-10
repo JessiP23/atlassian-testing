@@ -7,8 +7,8 @@
 // Zoom recording the agent could not read, and the PR did not say so.
 
 // First line of prose: skips markdown headings and list bullets so a report that opens with `### Root cause` yields the sentence under it.
-const firstLine = (t) => String(t || '').split('\n').map((l) => l.trim()).find((l) => l && !/^#{1,6}\s/.test(l) && !/^[-*]\s*$/.test(l))?.replace(/^[-*]\s+/, '') || ''
-const firstSentence = (t) => (firstLine(t).match(/^.*?[.!?](\s|$)/) || [firstLine(t)])[0].trim()
+const firstLine = (t) => String(t || '').split('\n').map((l) => l.trim()).find((l) => l && !/^#{1,6}\s/.test(l) && !/^[-*]\s*$/.test(l) && !/^(done|ok|okay|finished|complete)[.!]?$/i.test(l) && l.split(/\s+/).length >= 4)?.replace(/^[-*]\s+/, '') || ''
+const firstSentence = (t) => { const l = firstLine(t).replace(/^(done|ok|okay|finished|complete)[.!]\s*/i, ''); return (l.match(/^.*?[.!?](\s|$)/) || [l])[0].trim() }
 const short = (sha) => String(sha || '').slice(0, 7)
 
 /** @returns {{confirmed:{claim,source}[], inferred:{claim,basis}[], unverified:{claim,how}[]}} */
