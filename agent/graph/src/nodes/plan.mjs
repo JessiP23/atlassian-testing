@@ -11,6 +11,7 @@ import { converseJson } from '../lib/bedrock.mjs'
 import { tierFor, estimateCost } from '../lib/models.mjs'
 import { DIFF_LIMITS } from '../lib/guard.mjs'
 import { loadProfile } from '../../profiles/index.mjs'
+import { recentCommits, relatedTickets, historyBlock } from '../lib/history.mjs'
 
 // Soft target given to the planner. The hard cap in guard.mjs still applies to the real diff; this
 // is what keeps a plan from ballooning to 8 files and a 21k-token context pack.
@@ -73,6 +74,17 @@ export function planNode({ budget, onProgress = () => {} }) {
     })
 
     const sym = s.spec.symptom || {}
+    // History is cheap and runs while nothing else does: git log on the candidates, and the tracker's
+    // own memory of this symptom. Off with PAG_HISTORY=0 (e.g. a shallow clone with no Jira token).
+    let history = ''
+    if (process.env.PAG_HISTORY !== '0') {
+      const [commits, related] = await Promise.all([
+        recentCommits(s.repo, targets.map((t) => t.path)),
+        relatedTickets({ issueKey: s.issueKey, summary: s.spec.summary, terms: [sym.screen, ...(sym.inputs || []).slice(0, 2)] }),
+      ])
+      history = historyBlock({ commits, related })
+      if (related.tickets?.length) onProgress(`related tickets: ${related.tickets.map((t) => t.key).join(', ')}`)
+    }
     const user = [
       `SPEC: ${s.spec.summary}`,
       sym.screen
@@ -98,6 +110,7 @@ export function planNode({ budget, onProgress = () => {} }) {
       '',
       'CANDIDATE FILES:',
       ...bodies,
+      ...(history ? ['', history] : []),
       ...(esc ? [
         '',
         '## THIS IS A RE-PLAN — the first plan could not be implemented',
