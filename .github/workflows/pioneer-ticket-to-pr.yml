@@ -147,12 +147,21 @@ jobs:
           echo "mcp     $(npm ls -g @playwright/mcp --depth=0 2>/dev/null | grep -o '@playwright/mcp@[^ ]*')"
           echo "chromium $(ls $PLAYWRIGHT_BROWSERS_PATH | tr '\n' ' ')"
 
+      # No static keys anywhere: the job's OIDC token is exchanged for credentials that die with the job.
+      # The role (agent/infra/aws-gha.sh) trusts exactly one identity; print what this run's token claims to be,
+      # so a "Not authorized to perform sts:AssumeRoleWithWebIdentity" is a diff, not a guess. Claims only —
+      # the token itself is never printed.
+      - name: Who this run is to AWS (OIDC claims)
+        run: |
+          tok=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          node -e 'const p=JSON.parse(Buffer.from(process.argv[1].split(".")[1],"base64url").toString());
+            for (const k of ["iss","aud","sub","repository","ref","event_name","actor"]) console.log(k.padEnd(11), p[k])' "$tok"
+          echo "role        ${{ secrets.AWS_ROLE_TO_ASSUME }}"
+
       - name: AWS credentials for Bedrock
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
       # The backend the patched frontend will call: qa's AppSync/Cognito from the live registry.

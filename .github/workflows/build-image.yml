@@ -9,8 +9,8 @@ name: Build panda-agent image
 on:
   push:
     tags: ['v*']
-    branches: [main]
-    paths: ['agent/**', '.github/workflows/build-image.yml']
+    branches: [main]   # every main commit, not only agent/**: the ticket workflow refuses an `edge` image whose
+                       # commit differs from the run's, so a workflow-only push must produce an image too
   workflow_dispatch:
 
 permissions:
