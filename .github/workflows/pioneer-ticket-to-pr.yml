@@ -27,6 +27,11 @@ on:
         required: false
         default: false
         type: boolean
+      image_tag:
+        description: Image tag for THIS run only (e.g. edge built from a branch); empty = the release pin
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: pioneer-${{ github.event.client_payload.issue_key || inputs.issue_key }}
@@ -84,7 +89,7 @@ jobs:
     # and the agent itself at /opt/panda-agent. PAG_IMAGE_TAG (repo variable) is the release pin —
     # v1.0.0 for the team's label, `edge` (built from main) for PandaAgentGraphDev.
     container:
-      image: ghcr.io/jessip23/panda-agent:${{ vars.PAG_IMAGE_TAG || 'edge' }}
+      image: ghcr.io/jessip23/panda-agent:${{ inputs.image_tag || vars.PAG_IMAGE_TAG || 'edge' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -135,10 +140,10 @@ jobs:
 
       - name: Runtime pins in this image
         run: |
-          echo "image   ${{ vars.PAG_IMAGE_TAG || 'edge' }}  ($PAG_IMAGE_REF)"
+          echo "image   ${{ inputs.image_tag || vars.PAG_IMAGE_TAG || 'edge' }}  ($PAG_IMAGE_REF)"
           # `edge` must be built from the commit this run is on; a stale image silently runs old agent code
           # (3437: two runs died at locate on a fix that was already on main but not yet in the image).
-          if [ "${{ vars.PAG_IMAGE_TAG || 'edge' }}" = "edge" ] && [[ "$PAG_IMAGE_REF" != *"@${{ github.sha }}" ]]; then
+          if [ "${{ inputs.image_tag || vars.PAG_IMAGE_TAG || 'edge' }}" = "edge" ] && [[ "$PAG_IMAGE_REF" != *"@${{ github.sha }}" ]]; then
             echo "::error::image edge is built from ${PAG_IMAGE_REF##*@} but this run is on ${{ github.sha }} — wait for 'Build panda-agent image' to finish, then run again"
             exit 1
           fi
