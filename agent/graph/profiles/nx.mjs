@@ -22,6 +22,17 @@ export default {
   // the projects `nx affected` says a merge actually touched.
   baselineAll: false,
 
+  /** Directory (relative to repo) holding the project.json that owns `file`, or null. */
+  projectRootOf(repo, file) {
+    let dir = path.dirname(path.join(repo, file))
+    const stop = path.resolve(repo)
+    while (dir.startsWith(stop) && dir !== stop) {
+      if (fs.existsSync(path.join(dir, 'project.json'))) return path.relative(repo, dir)
+      dir = path.dirname(dir)
+    }
+    return null
+  },
+
   ownerOf(repo, file) {
     let dir = path.dirname(path.join(repo, file))
     const stop = path.resolve(repo)
@@ -69,11 +80,38 @@ export default {
   // nx always has a test target; whether a GIVEN file has an owning project is testOne's question.
   hasUnitRunner: () => true,
 
+  /** The test executor behind `<project>:test` — jest and vitest take different "just this file" flags. */
+  testRunnerOf(repo, specFile) {
+    try {
+      const root = this.projectRootOf(repo, specFile)
+      if (!root) return 'jest'
+      const pj = JSON.parse(fs.readFileSync(path.join(repo, root, 'project.json'), 'utf8'))
+      const ex = pj.targets?.test?.executor || ''
+      if (/vite/.test(ex)) return 'vitest'
+      if (/jest/.test(ex)) return 'jest'
+      if (fs.existsSync(path.join(repo, root, 'vite.config.ts')) && !fs.existsSync(path.join(repo, root, 'jest.config.ts'))) return 'vitest'
+    } catch { /* fall through */ }
+    return 'jest'
+  },
+
   testOne(repo, specFile) {
     const project = this.ownerOf(repo, specFile)
     if (!project) return null
+    const runner = this.testRunnerOf(repo, specFile)
+    // `--testPathPattern` is a JEST flag. Passed to an @nx/vite:test target it is silently ignored and the
+    // WHOLE project suite runs (3440: "Full suite ran (176 files)" on every attempt — 2–3 min each, four
+    // attempts killed on the clock). vitest takes the file as a positional filter after `--`.
+    if (runner === 'vitest') {
+      return {
+        project, runner,
+        // @nx/vite:test's own option (schema: testFiles: array) — the executor passes it to vitest as the
+        // file filter, so only this spec runs.
+        argv: ['nx', 'run', `${project}:test`, `--testFiles=${specFile}`, '--watch=false', '--output-style=stream', '--skip-nx-cache'],
+        display: `npx nx run ${project}:test --testFiles=${specFile} --watch=false`,
+      }
+    }
     return {
-      project,
+      project, runner,
       argv: ['nx', 'run', `${project}:test`, `--testPathPattern=${specFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, '--output-style=stream', '--skip-nx-cache'],
       display: `npx nx run ${project}:test --testPathPattern=${specFile}`,
     }
