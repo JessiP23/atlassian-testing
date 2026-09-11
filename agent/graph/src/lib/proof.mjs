@@ -47,7 +47,10 @@ export function proofFromState(s) {
 
   // ---- the agent's reading of the cause ----------------------------------------------------------
   if (s.patchReport) {
-    inferred.push({ claim: `Root cause as the agent read it: ${firstSentence(s.patchReport).slice(0, 300)}`, basis: `code reading; ${(s.changed || []).length} file(s) changed` })
+    // The report has a '### Root cause' section by contract; read under it when present, so a wrap-up
+    // line the session wrote first ("Lint clean, both tests pass") is not mistaken for the cause.
+    const under = String(s.patchReport).split(/^###\s*Root cause\s*$/im)[1]
+    inferred.push({ claim: `Root cause as the agent read it: ${firstSentence(under ?? s.patchReport).slice(0, 300)}`, basis: `code reading; ${(s.changed || []).length} file(s) changed` })
   }
   for (const h of s.plan?.hypotheses || []) {
     if (h.verdict === 'confirmed') confirmed.push({ claim: `Hypothesis held: ${h.statement}`, source: h.evidence || 'reproducing test' })
