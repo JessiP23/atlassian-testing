@@ -10,7 +10,7 @@ name: Pioneer — ESI ticket to PR (with evidence)
 #
 # Trigger from Jira Automation: WHEN Labels changed -> IF contains PandaAgentGraph -> Send web request
 #   POST https://api.github.com/repos/<this repo>/dispatches
-#   headers: Authorization: Bearer <PAT with repo scope> (hidden) · Accept: application/vnd.github+json
+#   headers: Authorization: Bearer <fine-grained PAT, this repo, Contents: read+write> · Accept: application/vnd.github+json
 #   body:    {"event_type":"pioneer-ticket","client_payload":{"issue_key":"{{issue.key}}"}}
 
 run-name: ${{ github.event.client_payload.issue_key || inputs.issue_key }}${{ inputs.image_tag && format(' · image {0}', inputs.image_tag) || '' }}
@@ -72,6 +72,9 @@ env:
   PAG_JIRA_TRANSITION: ${{ vars.PAG_JIRA_TRANSITION || 'READY FOR REVIEW' }}
   PAG_UI_EVIDENCE: '1'
   PAG_APP_URL: http://localhost:3000
+  # Phase C: the deploy env developers keep in the product checkout's .env.local (hosted zone, account
+  # id) as KEY=value lines. Empty = the deploy node skips and browser QA stays in observe mode.
+  PAG_DEPLOY_ENV: ${{ vars.PAG_DEPLOY_ENV }}
   # Static egress for the QA browser (http://user:pass@host:3128) once that IP is allow-listed on
   # qa's WAF. Empty = no proxy; QA then probes the API first and skips itself if the runner is blocked.
   PAG_BROWSER_PROXY: ${{ secrets.PAG_BROWSER_PROXY }}
@@ -98,6 +101,8 @@ jobs:
       options: --shm-size=2g
     env:
       AGENT_DIR: /opt/panda-agent/agent
+      # `secrets` cannot be read in a step's `if`; mirrored into env so the App step can be conditional.
+      PIONEER_APP_ID: ${{ secrets.PIONEER_APP_ID }}
     # Container jobs default to `sh`; the steps use bash (`set -o pipefail`, arrays).
     defaults:
       run:
@@ -108,6 +113,36 @@ jobs:
       - name: Checkout the agent repo (workflow files)
         uses: actions/checkout@v5
 
+      # Who the agent is on GitHub. With the org's GitHub App installed on pioneer (secrets
+      # PIONEER_APP_ID + PIONEER_APP_PRIVATE_KEY) a token is minted here for this run only — one hour,
+      # pioneer only, and the PRs come from panda-agent[bot]. Until the App exists the fine-grained PAT
+      # PIONEER_TOKEN is used and the PRs appear as its owner. Nothing else in the job knows which.
+      - name: GitHub App token for pioneer (when the App is installed)
+        id: app
+        if: env.PIONEER_APP_ID != ''
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.PIONEER_APP_ID }}
+          private-key: ${{ secrets.PIONEER_APP_PRIVATE_KEY }}
+          owner: AssetPandaLLC
+          repositories: pioneer
+
+      - name: Which identity pushes to pioneer
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.PIONEER_TOKEN }}
+        run: |
+          echo "::add-mask::$GH_TOKEN"
+          echo "PIONEER_TOKEN=$GH_TOKEN" >> "$GITHUB_ENV"
+          if [ "${{ steps.app.outcome }}" = "success" ]; then
+            echo "GitHub App ${{ steps.app.outputs.app-slug }} — PRs will be authored by ${{ steps.app.outputs.app-slug }}[bot]"
+            echo "GIT_AUTHOR=${{ steps.app.outputs.app-slug }}[bot]" >> "$GITHUB_ENV"
+            echo "GIT_EMAIL=${{ steps.app.outputs.app-slug }}[bot]@users.noreply.github.com" >> "$GITHUB_ENV"
+          else
+            echo "fine-grained PAT (secret PIONEER_TOKEN) — PRs will be authored by $(gh api user -q .login)"
+            echo "GIT_AUTHOR=panda-agent[bot]" >> "$GITHUB_ENV"
+            echo "GIT_EMAIL=panda-agent@users.noreply.github.com" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout pioneer (full history — history mining and baselines read merges)
         uses: actions/checkout@v5
         with:
@@ -115,7 +150,7 @@ jobs:
           ref: main
           path: pioneer
           fetch-depth: 0
-          token: ${{ secrets.PIONEER_TOKEN }}
+          token: ${{ env.PIONEER_TOKEN }}
           persist-credentials: true   # the agent pushes agent/* branches with this token
 
       # 2.2 GB of node_modules: cached on the lockfile so a warm run restores in ~1 min instead of
@@ -171,10 +206,42 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # Phase C. Credentials for the DEPLOY, kept apart from the Bedrock ones: a second OIDC exchange
+      # into the dev account's panda-agent-deploy, then the chain into ap-cicd-cross-account-deployment
+      # that pioneer's own CI uses. They are exported as PAG_DEPLOY_AWS_* — putting them in AWS_* would
+      # point Claude's own calls at the dev account and every model call in the run would fail.
+      # Inert until the repo variable exists: create the role with agent/infra/aws-deploy-role.sh
+      # (needs IAM admin in 362202801688), then set PAG_DEPLOY_ROLE_ARN and PAG_DEPLOY_ENV.
+      - name: Deploy credentials (dev account)
+        if: vars.PAG_DEPLOY_ROLE_ARN != ''
+        continue-on-error: true   # no deploy = observe-mode QA, never a failed run
+        run: |
+          tok=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | jq -r .value)
+          step=$(aws sts assume-role-with-web-identity --role-arn "${{ vars.PAG_DEPLOY_ROLE_ARN }}" \
+                   --role-session-name "panda-agent-$ISSUE_KEY" --web-identity-token "$tok" \
+                   --duration-seconds 3600 --query Credentials --output json)
+          export AWS_ACCESS_KEY_ID=$(jq -r .AccessKeyId <<<"$step")
+          export AWS_SECRET_ACCESS_KEY=$(jq -r .SecretAccessKey <<<"$step")
+          export AWS_SESSION_TOKEN=$(jq -r .SessionToken <<<"$step")
+          final=$(aws sts assume-role --role-arn "${{ vars.PAG_DEPLOY_TARGET_ROLE_ARN || 'arn:aws:iam::362202801688:role/ap-cicd-cross-account-deployment' }}" \
+                   --role-session-name "panda-agent-$ISSUE_KEY" --duration-seconds 3600 --query Credentials --output json)
+          for k in AccessKeyId:PAG_DEPLOY_AWS_ACCESS_KEY_ID SecretAccessKey:PAG_DEPLOY_AWS_SECRET_ACCESS_KEY SessionToken:PAG_DEPLOY_AWS_SESSION_TOKEN; do
+            v=$(jq -r ".${k%%:*}" <<<"$final"); echo "::add-mask::$v"; echo "${k##*:}=$v" >> "$GITHUB_ENV"
+          done
+          echo "PAG_DEPLOY_AWS_ARN=$(AWS_ACCESS_KEY_ID=$(jq -r .AccessKeyId <<<"$final") AWS_SECRET_ACCESS_KEY=$(jq -r .SecretAccessKey <<<"$final") AWS_SESSION_TOKEN=$(jq -r .SessionToken <<<"$final") aws sts get-caller-identity --query Arn --output text)" >> "$GITHUB_ENV"
+
       # The backend the patched frontend will call: qa's AppSync/Cognito from the live registry.
       # Writes agent/graph/.env (VITE_APP_AWS_* only — there is no other .env in CI).
-      - name: Point the app at the qa backend
-        run: node $AGENT_DIR/graph/bin/backend.mjs qa
+      # qa when there is no deploy role (the fix cannot run anywhere else); the agent's own backend
+      # when there is, so the deploy has somewhere to land and QA can show the fix working.
+      - name: Point the app at a backend
+        run: |
+          if [ -n "${{ vars.PAG_DEPLOY_ROLE_ARN }}" ] && node $AGENT_DIR/graph/bin/backend.mjs agent; then
+            echo "app -> the agent backend: a backend fix deploys here and QA can show it working"
+          else
+            node $AGENT_DIR/graph/bin/backend.mjs qa
+            echo "app -> qa (shared): backend fixes are QA'd in observe mode"
+          fi
 
       - name: Jira reachability
         run: node $AGENT_DIR/graph/bin/jira-probe.mjs "$ISSUE_KEY"
@@ -228,14 +295,14 @@ jobs:
       - name: Run the agent
         id: agent
         env:
-          GH_TOKEN: ${{ secrets.PIONEER_TOKEN }}
+          GH_TOKEN: ${{ env.PIONEER_TOKEN }}
           # Live by default. Repo variable PAG_DRY_RUN=true (or the checkbox on a manual run) holds the push and the PRs.
           DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || (vars.PAG_DRY_RUN == 'true') }}
         run: |
           set -o pipefail
           FLAG=""; [ "$DRY" = "true" ] && FLAG="--dry-run"
-          git -C pioneer config user.name  "panda-agent[bot]"
-          git -C pioneer config user.email "panda-agent@users.noreply.github.com"
+          git -C pioneer config user.name  "$GIT_AUTHOR"
+          git -C pioneer config user.email "$GIT_EMAIL"
           [ "${{ steps.par-cache.outputs.cache-hit }}" = "true" ] && FLAG="$FLAG --skip-index"
           node $AGENT_DIR/graph/bin/ci.mjs "$ISSUE_KEY" --repo "$PIONEER_DIR" --base main $FLAG
 

@@ -1,101 +1,89 @@
-name: Agent — close the ticket when the PR merges
+name: Pioneer — move tickets to Done when their agent PR is merged
 
-# The other half of the loop. `agent-ticket-to-pr.yml` opens the PR and moves the ticket to review;
-# this moves it to Done when a human merges that PR, and says so on the ticket.
+# The other half of the loop. "Pioneer — ESI ticket to PR" opens the PR and moves the ticket to
+# review; this moves it to Done when a HUMAN merges that PR, and says so on the ticket.
 #
-# Why it is a separate workflow: the agent's run is long dead by the time anyone merges — often
-# days later — so nothing in that job can watch for it. `pull_request: closed` is the only event
-# that fires at the right moment, and it costs nothing when the PR is not the agent's.
+# Why a poll and not `pull_request: closed`: that event fires in the repo that owns the PR —
+# AssetPandaLLC/pioneer — and this workflow lives here, so it would never fire. Polling the
+# agent's own PRs (branch prefix agent/) with the same token the agent pushes with needs nothing
+# installed in pioneer. Idempotent: a ticket already in Done is left alone (jira-transition exits 0).
 #
 # The agent still cannot merge anything. This only reacts to a merge a person performed.
 
 on:
-  pull_request:
-    types: [closed]
-  # For a PR that was merged before this workflow existed, or one whose branch was named by hand.
+  schedule:
+    - cron: '*/30 * * * *'
   workflow_dispatch:
     inputs:
-      issue_key:
-        description: Jira issue key to move to Done
-        required: true
+      since_hours:
+        description: Look back this many hours for merged agent PRs (default 1)
+        required: false
+        default: '1'
         type: string
+      dry_run:
+        description: List what would move, move nothing
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: agent-merged-${{ github.event.pull_request.number || inputs.issue_key }}
+  group: pioneer-merged
   cancel-in-progress: false
+
+env:
+  PAG_ENV_PRECEDENCE: env
+  PAG_QUIET_ENV: '1'
+  JIRA_URL: ${{ secrets.JIRA_BASE_URL || vars.JIRA_BASE_URL }}
+  JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+  JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+  PIONEER: AssetPandaLLC/pioneer
 
 jobs:
   close:
-    # Only merged PRs, never a PR someone closed without merging — that ticket is not done, and
-    # moving it to Done would be worse than doing nothing.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    env:
-      JIRA_URL: ${{ secrets.JIRA_BASE_URL || vars.JIRA_BASE_URL }}
-      JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
-      JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-      PAG_ENV_PRECEDENCE: env
-      BRANCH: ${{ github.event.pull_request.head.ref }}
-      PR_TITLE: ${{ github.event.pull_request.title }}
-      PR_URL: ${{ github.event.pull_request.html_url }}
-      MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
-      INPUT_KEY: ${{ inputs.issue_key }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-        with:
-          sparse-checkout: agent
-          sparse-checkout-cone-mode: false
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: agent/graph/package-lock.json
+      - run: npm --prefix agent/graph ci --no-audit --no-fund --prefer-offline
 
-      # Only the Jira client is needed here, not the graph.
-      - run: npm --prefix agent/graph ci --no-audit --no-fund --prefer-offline --omit=dev || npm --prefix agent/graph install --no-audit --no-fund
-
-      # The issue key comes from the branch the agent created (`agent/KAN-11-fix`), and falls back
-      # to the PR title, which carries it too. A PR from a human branch that names no ticket simply
-      # exits 0 — this workflow runs on every merge and must be silent for the ones it does not own.
-      - name: Find the ticket
-        id: key
-        run: |
-          KEY="$INPUT_KEY"
-          if [ -z "$KEY" ]; then
-            KEY=$(printf '%s' "$BRANCH"    | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1 || true)
-          fi
-          if [ -z "$KEY" ]; then
-            KEY=$(printf '%s' "$PR_TITLE"  | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -1 || true)
-          fi
-          if [ -z "$KEY" ]; then
-            echo "no Jira key in branch \"$BRANCH\" or title — not an agent PR, nothing to do"
-            echo "found=" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          echo "found=$KEY" >> "$GITHUB_OUTPUT"
-          echo "ticket: $KEY"
-
-      - name: Move it to Done and say why
-        if: steps.key.outputs.found != ''
+      # Merged in the window, head branch agent/*, base main. The ticket key is in the branch name
+      # (agent/ESI2-1234-fix). The qa copy of the same fix is a second PR on the same ticket; both
+      # resolve to one key and the second transition is a no-op.
+      - name: Merged agent PRs
+        id: merged
         env:
-          KEY: ${{ steps.key.outputs.found }}
+          GH_TOKEN: ${{ secrets.PIONEER_TOKEN }}
         run: |
-          cd agent/graph
-          node bin/jira-transition.mjs "$KEY" \
-            --to "${{ vars.PAG_JIRA_DONE || 'Done,Closed,Resolved,Complete,Completed' }}" \
-            --comment "Merged by @${MERGED_BY:-a reviewer}: ${PR_URL}
+          HOURS="${{ inputs.since_hours || '1' }}"
+          SINCE=$(date -u -d "-${HOURS} hour" +%Y-%m-%dT%H:%M:%SZ)
+          gh pr list --repo "$PIONEER" --state merged --base main --limit 100 \
+            --search "head:agent/ merged:>=$SINCE" \
+            --json number,url,headRefName,mergedBy,mergedAt \
+            -q '.[] | select(.headRefName | startswith("agent/")) | [(.headRefName | capture("(?<k>[A-Z][A-Z0-9]+-[0-9]+)").k), .url, .mergedBy.login] | @tsv' \
+            | sort -u > /tmp/merged.tsv || true
+          echo "since $SINCE: $(wc -l < /tmp/merged.tsv) merged agent PR(s)"
+          cat /tmp/merged.tsv
 
-          Branch ${BRANCH} is on ${{ github.event.pull_request.base.ref || 'the base branch' }}. Moving this ticket to Done."
+      - name: Move each ticket to Done and say who merged
+        if: ${{ !inputs.dry_run }}
+        run: |
+          while IFS=$'\t' read -r KEY URL WHO; do
+            [ -z "$KEY" ] && continue
+            echo "== $KEY  $URL  merged by ${WHO:-a reviewer}"
+            (cd agent/graph && node bin/jira-transition.mjs "$KEY" \
+              --to "${{ vars.PAG_JIRA_DONE || 'Done,Closed,Resolved,Complete,Completed' }}" \
+              --comment "Merged by @${WHO:-a reviewer}: ${URL}. Moving this ticket to Done.")
+          done < /tmp/merged.tsv
 
       - name: Summary
         if: always()
         run: |
-          {
-            echo "### ${{ steps.key.outputs.found || 'no ticket' }}"
-            echo "PR: $PR_URL"
-            echo "Branch: \`$BRANCH\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          { echo "### merged agent PRs"; echo; echo '```'; cat /tmp/merged.tsv 2>/dev/null || echo none; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

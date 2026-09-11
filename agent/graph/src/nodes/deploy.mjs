@@ -53,7 +53,10 @@ const BENIGN = new Set(['lambdas-fns-collection-filter-ai-processor', 'lambdas-f
 // overwrite each other's Lambdas, which this pipeline never does. Changing this id means a new
 // 30-minute stack build and an empty org — do it deliberately, never for a ticket.
 export const AGENT_VERSION_ID = '238f0e42'
-export const versionIdFor = () => AGENT_VERSION_ID
+// PAG_BACKEND_VERSION_ID overrides it for one run. Two runs sharing a version overwrite each other's
+// Lambdas, so parallel backend tickets in CI must each set their own (Phase C) — the default stays the
+// one warm, seeded backend, because a new id means a 30-40 minute stack build and an empty org.
+export const versionIdFor = () => process.env.PAG_BACKEND_VERSION_ID || AGENT_VERSION_ID
 
 // The live registry the app's own Env Switcher reads. Every deployed version (qa, demo, developer
 // versions, the agent backend after its version:upsert) is listed with its Cognito pool, which is
@@ -92,6 +95,32 @@ export function envWithoutStaticKeys() {
   for (const k of STATIC_KEYS) delete e[k]
   if (e.PAG_SHELL_AWS_PROFILE) e.AWS_PROFILE = e.PAG_SHELL_AWS_PROFILE
   return e
+}
+
+/**
+ * CI credentials for the deploy, minted by the workflow (OIDC -> panda-agent-deploy ->
+ * ap-cicd-cross-account-deployment) and passed under PAG_DEPLOY_AWS_* so they never shadow the
+ * Bedrock role this job also holds. Absent on a laptop, where the SSO session below is used instead.
+ */
+export function ciDeployCredentials(env = process.env) {
+  if (!env.PAG_DEPLOY_AWS_ACCESS_KEY_ID || !env.PAG_DEPLOY_AWS_SECRET_ACCESS_KEY) return null
+  return {
+    AWS_ACCESS_KEY_ID: env.PAG_DEPLOY_AWS_ACCESS_KEY_ID,
+    AWS_SECRET_ACCESS_KEY: env.PAG_DEPLOY_AWS_SECRET_ACCESS_KEY,
+    ...(env.PAG_DEPLOY_AWS_SESSION_TOKEN ? { AWS_SESSION_TOKEN: env.PAG_DEPLOY_AWS_SESSION_TOKEN } : {}),
+    arn: env.PAG_DEPLOY_AWS_ARN || '(the deploy role)',
+  }
+}
+
+/**
+ * The deploy env developers export by hand: hosted zone, account id. On a laptop it is the product
+ * checkout's .env.local; in CI there is no such file, so the same KEY=value lines come from the repo
+ * variable PAG_DEPLOY_ENV. Returns null when neither exists — a deploy cannot be attempted without it.
+ */
+export function deployEnv(envLocalPath, env = process.env) {
+  if (env.PAG_DEPLOY_ENV) return { values: parseDotenv(env.PAG_DEPLOY_ENV), source: 'the repo variable PAG_DEPLOY_ENV' }
+  if (envLocalPath && fs.existsSync(envLocalPath)) return { values: parseDotenv(fs.readFileSync(envLocalPath, 'utf8')), source: envLocalPath }
+  return null
 }
 
 /**
@@ -171,25 +200,28 @@ export function deployNode({ budget, onProgress = () => {} }) {
     // QA screenshots whatever backend graph/.env points the app at. A deploy only helps when that is
     // the agent's own version; pointed at a shared backend (qa, released by the company account) the
     // fix cannot be deployed from here, and QA falls back to observe mode — honest screens, not proof.
+    // In CI the workflow mints deploy credentials (PAG_DEPLOY_AWS_*); on a laptop the SSO session is used.
+    const ci = ciDeployCredentials()
     const target = await backendOf(process.env.VITE_APP_AWS_COGNITO_USER_POOL_ID)
-    if (target && target.versionId !== versionIdFor(s.issueKey)) {
+    if (target && target.versionId !== versionIdFor(s.issueKey) && !ci) {
       return skip(`the app points at the shared backend "${target.branch}" released by ${target.developer} (version ${target.versionId}) — nothing can be deployed there from here, so QA runs in observe mode; \`npm run backend agent\` switches to the agent backend, where deploys land`)
     }
 
-    // The product checkout the worktree was made from holds the deploy env developers export by hand.
+    // The product checkout the worktree was made from holds the deploy env developers export by hand;
+    // in CI the same lines come from the repo variable PAG_DEPLOY_ENV.
     let productDir
     try { productDir = path.dirname(path.resolve(s.repo, (await exec('git', ['rev-parse', '--git-common-dir'], { cwd: s.repo })).stdout.trim())) } catch { productDir = null }
-    const envLocal = productDir && path.join(productDir, '.env.local')
-    if (!envLocal || !fs.existsSync(envLocal)) return skip(`no .env.local in the product checkout (${productDir || '?'}) — the deploy env (hosted zone, account id) lives there`)
-    const creds = await exportCredentials()
-    if (!creds) return skip(`no AWS credentials from the SSO session (profile ${process.env.PAG_SHELL_AWS_PROFILE || 'default'}) — run \`aws sso login\` before the run`)
+    const dep = deployEnv(productDir && path.join(productDir, '.env.local'))
+    if (!dep) return skip(`no deploy env: neither .env.local in the product checkout (${productDir || '?'}) nor the repo variable PAG_DEPLOY_ENV — the hosted zone and account id live there`)
+    const creds = ci || await exportCredentials()
+    if (!creds) return skip(`no AWS credentials for the deploy: set PAG_DEPLOY_ROLE_ARN in CI (agent/infra/aws-deploy-role.sh), or run \`aws sso login\` before a local run`)
     if (/:user\/panda-code-agent$/.test(creds.arn)) return skip(`the resolved identity is the bot user (${creds.arn}) — the deploy needs your SSO role; run \`aws sso login\` and set AWS_PROFILE in the shell`)
     const { arn, ...credEnv } = creds
-    onProgress(`deploy: as ${arn}`)
+    onProgress(`deploy: as ${arn} · env from ${dep.source}`)
 
     const versionId = versionIdFor(s.issueKey)
     const env = {
-      ...envWithoutStaticKeys(), ...parseDotenv(fs.readFileSync(envLocal, 'utf8')), ...credEnv,
+      ...envWithoutStaticKeys(), ...dep.values, ...credEnv,
       AWS_ENV: 'dev', AP_VERSION_ID: versionId, BRANCH_NAME: s.branchName || `agent/${s.issueKey}-fix`,
       CDK_DISABLE_NOTICES: '1', FORCE_COLOR: '0', NX_DAEMON: 'false',
     }

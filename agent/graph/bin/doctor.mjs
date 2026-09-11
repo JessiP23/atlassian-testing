@@ -129,19 +129,7 @@ if (token && allowed) {
     ok(`can read ${allowed}`, `default branch: ${r.body.default_branch}${r.body.fork ? ' (a fork — good)' : ''}`)
     if (perms.push) ok('token can push branches')
     else bad('token cannot push', 'contents:write is missing', 'the run will reach publish and fail there')
-    // Workflows only ever dispatch from the DEFAULT branch. A workflow perfect on a feature branch
-    // simply never fires, and there is no error anywhere to tell you why.
-    const wf = await gh(`/repos/${allowed}/contents/.github/workflows/agent-ticket-to-pr.yml?ref=${r.body.default_branch}`)
-    // A WARNING, not a failure: this only matters if you are driving the agent from Jira through
-    // GitHub Actions IN THIS REPO. A local run (bin/ci.mjs against a worktree) never touches it,
-    // and on a repo you do not own, installing a workflow is a PR they have to merge — a far bigger
-    // ask than a token, and not a prerequisite for anything else here.
-    if (wf.status === 200) ok(`the workflow is on ${r.body.default_branch}`)
-    else warn(`agent-ticket-to-pr.yml is not on ${r.body.default_branch}`, `HTTP ${wf.status}`,
-      'only needed for Jira -> repository_dispatch in this repo. Local runs do not use it. repository_dispatch fires only workflows on the default branch, so it would have to be merged there.')
-    const merged = await gh(`/repos/${allowed}/contents/.github/workflows/agent-pr-merged.yml?ref=${r.body.default_branch}`)
-    if (merged.status === 200) ok(`the merge-close workflow is on ${r.body.default_branch}`)
-    else warn('agent-pr-merged.yml is not on the default branch', 'tickets will not move to Done on merge')
+    // The workflows live in the AGENT repo (.github/workflows/pioneer-*.yml), not in the product repo — nothing to check here.
   } else if (r.status === 404) {
     bad(`cannot see ${allowed}`, 'HTTP 404', 'either the repo name is wrong or the token has no access to it — 404 is what GitHub returns for both')
   } else {

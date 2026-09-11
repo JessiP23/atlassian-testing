@@ -25,7 +25,7 @@ BRANCH=${BRANCH:-main}                             # only runs on this branch ma
 ROLE=${ROLE:-panda-agent-gha}
 BUCKET=${BUCKET:-assetpanda-agent-runs}
 REGION=${REGION:-us-east-1}
-BUDGET_USD=${BUDGET_USD:-300}                      # monthly Bedrock spend at which the kill switch fires
+BUDGET_USD=${BUDGET_USD:-1500}                      # monthly Bedrock spend at which the kill switch fires
 ALERT_EMAIL=${ALERT_EMAIL:-JMartinez@assetpanda.com}
 MODELS=${MODELS:-"us.anthropic.claude-haiku-4-5-20251001-v1:0 us.anthropic.claude-opus-5"}
 
