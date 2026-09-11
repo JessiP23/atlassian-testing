@@ -6,7 +6,9 @@
 # Waits for "Build panda-agent image" of HEAD to finish (so the run never hits the stale-edge guard), then
 # dispatches each ticket with image_tag=edge. Label-triggered runs keep using PAG_IMAGE_TAG.
 set -euo pipefail
-[ $# -ge 1 ] || { echo "usage: $0 ESI2-KEY [ESI2-KEY …]"; exit 2; }
+DRY=false
+if [ "${1:-}" = "--dry-run" ]; then DRY=true; shift; fi
+[ $# -ge 1 ] || { echo "usage: $0 [--dry-run] ESI2-KEY [ESI2-KEY …]   (--dry-run: everything except push/PR — for load tests)"; exit 2; }
 sha=$(git rev-parse HEAD)
 if [ -n "$(git status --porcelain -- agent .github 2>/dev/null)" ]; then echo "uncommitted changes under agent/ or .github/ — commit and push first"; exit 1; fi
 if ! git merge-base --is-ancestor "$sha" "origin/$(git rev-parse --abbrev-ref HEAD)" 2>/dev/null; then echo "HEAD is not pushed — git push first"; exit 1; fi
@@ -24,6 +26,6 @@ for i in $(seq 1 60); do
 done
 
 for key in "$@"; do
-  gh workflow run pioneer-ticket-to-pr.yml -f "issue_key=$key" -f image_tag=edge >/dev/null && echo "dispatched $key"
+  gh workflow run pioneer-ticket-to-pr.yml -f "issue_key=$key" -f image_tag=edge -f "dry_run=$DRY" >/dev/null && echo "dispatched $key$([ "$DRY" = true ] && echo " (dry run)")"
 done
 sleep 5; gh run list --workflow pioneer-ticket-to-pr.yml --limit "$#"
