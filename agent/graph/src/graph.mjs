@@ -119,6 +119,11 @@ export /**
 function onlyFrozenFileFails(s) {
   const f = s.gate?.failures || []
   if (!f.length || !s.repro?.file) return false
+  // Only when the reproducing test PASSES. Its own lint failing on a green fix is a salvageable
+  // handover ("clear the lint on that test"); the same test still FAILING means there is no fix yet,
+  // and calling that "the product fix is green" is a lie a reviewer would act on (ESI2-3437,
+  // 2026-09-11: an empty diff was handed over with exactly that sentence).
+  if (!s.evidence?.reproGreen) return false
   const frozen = String(s.repro.file)
   return f.every((x) => x.file && (frozen.endsWith(x.file) || x.file.endsWith(frozen) || x.file === frozen))
 }

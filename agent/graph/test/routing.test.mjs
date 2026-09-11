@@ -77,6 +77,7 @@ test('ESI2-3393: failures only in the frozen repro file skip repair entirely', (
   const s = {
     gate: { ok: false, failures: [{ file: frozen, rule: 'no-extra-semi' }, { file: frozen, rule: '@nx/enforce-module-boundaries' }] },
     repro: { status: 'red', file: frozen },
+    evidence: { reproGreen: true },   // the fix works; only the test file's OWN lint is red
     changed: ['packages/lambdas/fns/import-one-schema-template/src/one-schema-template/get-template-columns.ts'],
     attempts: 0,
   }
@@ -99,4 +100,19 @@ test('reproduce can send the run back to planning when the plan is in the wrong 
   assert.equal(afterReproduce({ escalation: { neededFiles: [] } }), 'refuse', 'nothing to widen')
   assert.equal(afterReproduce({ repro: { status: 'red' } }), 'patch')
   assert.equal(afterReproduce({ refusal: { at: 'reproduce' } }), 'refuse')
+})
+
+// ESI2-3437, 2026-09-11: Bedrock 503'd the patch session, Claude Code exited 0 with subtype
+// `success` at $0.0000, nothing was edited, and the run handed over an empty diff under the sentence
+// "the product fix itself is green". Two rules come out of it: the frozen-test salvage only applies
+// when that test is actually passing, and a $0 session that wrote nothing is an outage, not a verdict.
+test('frozen-test salvage needs the repro to be GREEN', async () => {
+  const { afterVerifyWith } = await import('../src/graph.mjs')
+  const budget = { timeFor: () => 600_000 }
+  const failing = { gate: { ok: false, failures: [{ file: 'x.repro.test.ts', rule: 'no-extra-semi' }] }, repro: { file: 'x.repro.test.ts' }, changed: ['a.ts'] }
+
+  // repro still red → this is a normal red gate: repair it, do not salvage it as "green fix, bad lint"
+  assert.equal(afterVerifyWith(budget)({ ...failing, evidence: {} , attempts: 0 }), 'repair')
+  // repro green, only the frozen file's own lint left → hand over with the diff
+  assert.equal(afterVerifyWith(budget)({ ...failing, evidence: { reproGreen: true } }), 'handover')
 })

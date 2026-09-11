@@ -241,10 +241,36 @@ export function patchNode({ budget, onProgress = () => {} }) {
     // environment" — there is nobody to answer the prompt. Safe because the blast radius is bounded
     // by construction: a disposable worktree, git denied at the tool layer, the real diff checked
     // against the plan's allowlist afterwards, and now a wall-clock kill.
-    const { code, cost, subtype, text: report } = await runClaude({
+    // A session that spends NOTHING and writes NO product file did not run. Claude Code exits 0 with
+    // subtype `success` when Bedrock refuses it — ESI2-3437 on 2026-09-11 burned 240s on
+    // "API Error: 503 … try again in a moment", reported success at $0.0000, and the run went on to
+    // verify, found the repro still red, and handed over an empty diff as if the fix had failed on
+    // its merits. Cost is the tell: a real edit session always spends. One retry, then the truth.
+    let { code, cost, subtype, text: report } = await runClaude({
       cwd: s.repo, prompt: PROMPT(s, ctx), model: tier.model, budgetUsd: allowance, timeoutMs: timeMs, onProgress,
     })
     budget.charge('patch', cost, { model: tier.model, subtype, exit: code })
+
+    const readOnly = new Set(plannedTests)
+    const productEdits = async () => (await exec('git', ['diff', '--name-only', 'HEAD'], { cwd: s.repo, maxBuffer: 1 << 24 }))
+      .stdout.split('\n').map((x) => x.trim()).filter(Boolean).filter((f) => !readOnly.has(f) && !isScratch(f))
+
+    if (cost === 0 && !(await productEdits()).length) {
+      const why = (String(report).match(/API Error: \d{3}[^\n]*/) || [])[0] || `${subtype || 'exit ' + code} with no spend`
+      const again = budget.timeFor('patch')
+      if (again < 2 * 60_000) {
+        return { refusal: { at: 'patch', reason: 'provider_unavailable', detail: `the model provider refused the patch session (${why}) and there is no time left to retry` } }
+      }
+      onProgress(`the patch session spent $0 and changed no product file — the provider refused it (${why}). Retrying once.`)
+      await new Promise((r) => setTimeout(r, 20_000));
+      ({ code, cost, subtype, text: report } = await runClaude({
+        cwd: s.repo, prompt: PROMPT(s, ctx), model: tier.model, budgetUsd: budget.availableFor('patch'), timeoutMs: again, onProgress,
+      }))
+      budget.charge('patch', cost, { model: tier.model, subtype, exit: code, retry: 1 })
+      if (cost === 0 && !(await productEdits()).length) {
+        return { refusal: { at: 'patch', reason: 'provider_unavailable', detail: `two patch sessions were refused by the model provider (${why}). Nothing is wrong with the ticket or the plan — re-run it.` } }
+      }
+    }
 
     if (fs.existsSync(escalate)) {
       const text = fs.readFileSync(escalate, 'utf8').trim()
