@@ -45,3 +45,22 @@ test('no red test but a testable explanation still open → patch proceeds (a re
   assert.equal(afterReproduce({ repro: { status: 'none' }, plan: {} }), 'patch', 'no hypotheses at all: old behaviour')
   assert.equal(afterReproduce({ repro: { status: 'red' }, plan: { hypotheses: v.hypotheses } }), 'patch')
 })
+
+// ESI2-3437 on the cleaned repo: plan widened twice, then refused because H2/H3 wanted the customer's
+// form definition — while naming four files it had never run a test against. A planner's prose is not
+// evidence; the reproduce node is. With files named and no widening left, the run continues and the
+// doubt travels to the PR as a risk note.
+import { MAX_WIDENINGS } from '../src/state.mjs'
+
+test('escalation with files named and no widening left continues to reproduce', () => {
+  const decide = (data, widenings, fresh) => {
+    if (!data.needsEscalation) return 'reproduce'
+    if (fresh.length && widenings < MAX_WIDENINGS) return 'locate'
+    return data.impactedFiles?.length ? 'reproduce' : 'refuse'
+  }
+  const named = { needsEscalation: true, impactedFiles: ['a.ts', 'b.ts'] }
+  assert.equal(decide(named, 0, ['newTerm']), 'locate', 'something new to search for → widen')
+  assert.equal(decide(named, MAX_WIDENINGS, ['newTerm']), 'reproduce', 'out of widenings but files named → let the test decide')
+  assert.equal(decide(named, 0, []), 'reproduce', 'nothing new to search for but files named → let the test decide')
+  assert.equal(decide({ needsEscalation: true, impactedFiles: [] }, MAX_WIDENINGS, []), 'refuse', 'no files and no lead left → refuse')
+})

@@ -143,6 +143,9 @@ export function planNode({ budget, onProgress = () => {} }) {
     })
     budget.charge('plan', estimateCost(tier, inTok, outTok), { model: tier.model, inTok, outTok })
 
+    // Set when the planner wanted data it does not have but still named files: the doubt is carried
+    // into the PR as a risk note instead of ending the run.
+    let escalationNote = null
     if (data.needsEscalation) {
       // "The backend must provide X first" is not a reason to stop in a monorepo that CONTAINS the
       // backend — it is a reason to widen the search to the files that provide X and plan across the
@@ -159,7 +162,18 @@ export function planNode({ budget, onProgress = () => {} }) {
         onProgress(`plan says another layer must change first (${fresh.slice(0, 4).join(', ')}) — widening the search to it instead of refusing (${(s.widenings ?? 0) + 1}/${MAX_WIDENINGS})`)
         return { plan: data, escalation: { from: 'plan', text: data.escalationReason, neededFiles: [], terms, stems }, widenings: (s.widenings ?? 0) + 1 }
       }
-      return { plan: data, refusal: { at: 'plan', reason: 'needs_escalation', detail: data.escalationReason } }
+      // No widening left. Refusing HERE is refusing on the planner's prose, before anything was run.
+      // If it still named files to change, the TEST decides: reproduce either demonstrates the defect
+      // on those files, or the run refuses needs_data with the failed checks as evidence
+      // (graph.mjs, noTestableExplanationLeft). ESI2-3437 refused at plan for "the customer's form
+      // definition is needed" while naming four files it never opened a test against.
+      if (data.impactedFiles?.length) {
+        onProgress(`plan still wants data the ticket does not carry — keeping its ${data.impactedFiles.length} file(s) and letting the test decide, not the prose`)
+        escalationNote = data.escalationReason || 'the planner asked for data the ticket does not carry'
+        data.needsEscalation = false
+      } else {
+        return { plan: data, refusal: { at: 'plan', reason: 'needs_escalation', detail: data.escalationReason } }
+      }
     }
     if (!data.impactedFiles?.length) {
       return { plan: data, refusal: { at: 'plan', reason: 'empty_plan', detail: 'planner named no files to change' } }
@@ -222,6 +236,9 @@ export function planNode({ budget, onProgress = () => {} }) {
     // Clear the escalation so the next patch attempt starts clean, and count the re-plan.
     // A plan after a widening is not a re-plan: the re-plan slots belong to reproduce and patch, which
     // read the code and may still name the true file.
-    return { plan: data, escalation: null, replans: (s.replans ?? 0) + (esc && esc.from !== 'plan' ? 1 : 0) }
+    return {
+      plan: data, escalation: null, replans: (s.replans ?? 0) + (esc && esc.from !== 'plan' ? 1 : 0),
+      ...(escalationNote ? { spec: { ...s.spec, riskNotes: [...(s.spec?.riskNotes || []), `The plan wanted data this ticket does not carry: ${escalationNote}`] } } : {}),
+    }
   }
 }

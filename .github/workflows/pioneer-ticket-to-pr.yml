@@ -304,7 +304,13 @@ jobs:
           git -C pioneer config user.name  "$GIT_AUTHOR"
           git -C pioneer config user.email "$GIT_EMAIL"
           [ "${{ steps.par-cache.outputs.cache-hit }}" = "true" ] && FLAG="$FLAG --skip-index"
-          node $AGENT_DIR/graph/bin/ci.mjs "$ISSUE_KEY" --repo "$PIONEER_DIR" --base main $FLAG
+          code=0
+          node $AGENT_DIR/graph/bin/ci.mjs "$ISSUE_KEY" --repo "$PIONEER_DIR" --base main $FLAG || code=$?
+          # Exit 3 is a REFUSAL: the agent finished, found it could not settle the ticket from the code,
+          # and said so on the ticket. That is a result, not a broken run — a red X here trains everyone
+          # to ignore the workflow. Any other non-zero exit is a genuine failure and stays red.
+          if [ "$code" = "3" ]; then echo "::notice::$ISSUE_KEY — the agent refused and commented on the ticket; nothing was pushed"; exit 0; fi
+          exit "$code"
 
       - name: Job summary
         if: always()
