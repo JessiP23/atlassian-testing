@@ -200,11 +200,17 @@ export function deployNode({ budget, onProgress = () => {} }) {
     // QA screenshots whatever backend graph/.env points the app at. A deploy only helps when that is
     // the agent's own version; pointed at a shared backend (qa, released by the company account) the
     // fix cannot be deployed from here, and QA falls back to observe mode — honest screens, not proof.
-    // In CI the workflow mints deploy credentials (PAG_DEPLOY_AWS_*); on a laptop the SSO session is used.
-    const ci = ciDeployCredentials()
+    // CREDENTIALS DECIDE, not which backend the app happens to point at. The old guard skipped
+    // whenever .env named a shared backend — which is what `bin/backend.mjs qa` writes at the start of
+    // every CI run and what a laptop is left on after any manual session — so a backend fix silently
+    // fell back to observe mode and the operator had to know to run `npm run backend agent` first.
+    // With credentials in hand the deploy belongs on the agent's own version, and step 5 repoints the
+    // app at it; without them nothing can be deployed anywhere and observe mode is the honest answer.
+    const creds = ciDeployCredentials() || await exportCredentials()
+    if (!creds) return skip('no AWS credentials for the deploy: set PAG_DEPLOY_ROLE_ARN in CI (agent/infra/aws-deploy-role.sh), or run `aws sso login` before a local run')
     const target = await backendOf(process.env.VITE_APP_AWS_COGNITO_USER_POOL_ID)
-    if (target && target.versionId !== versionIdFor(s.issueKey) && !ci) {
-      return skip(`the app points at the shared backend "${target.branch}" released by ${target.developer} (version ${target.versionId}) — nothing can be deployed there from here, so QA runs in observe mode; \`npm run backend agent\` switches to the agent backend, where deploys land`)
+    if (target && target.versionId !== versionIdFor(s.issueKey)) {
+      onProgress(`deploy: the app is on the shared backend "${target.branch}" (version ${target.versionId}) — deploying to the agent's own version ${versionIdFor(s.issueKey)} and repointing the app at it`)
     }
 
     // The product checkout the worktree was made from holds the deploy env developers export by hand;
@@ -213,8 +219,6 @@ export function deployNode({ budget, onProgress = () => {} }) {
     try { productDir = path.dirname(path.resolve(s.repo, (await exec('git', ['rev-parse', '--git-common-dir'], { cwd: s.repo })).stdout.trim())) } catch { productDir = null }
     const dep = deployEnv(productDir && path.join(productDir, '.env.local'))
     if (!dep) return skip(`no deploy env: neither .env.local in the product checkout (${productDir || '?'}) nor the repo variable PAG_DEPLOY_ENV — the hosted zone and account id live there`)
-    const creds = ci || await exportCredentials()
-    if (!creds) return skip(`no AWS credentials for the deploy: set PAG_DEPLOY_ROLE_ARN in CI (agent/infra/aws-deploy-role.sh), or run \`aws sso login\` before a local run`)
     if (/:user\/panda-code-agent$/.test(creds.arn)) return skip(`the resolved identity is the bot user (${creds.arn}) — the deploy needs your SSO role; run \`aws sso login\` and set AWS_PROFILE in the shell`)
     const { arn, ...credEnv } = creds
     onProgress(`deploy: as ${arn} · env from ${dep.source}`)
