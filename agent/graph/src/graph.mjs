@@ -40,6 +40,7 @@ import { publishNode } from './nodes/publish.mjs'
 import { approveNode, REQUIRE_APPROVAL } from './nodes/approve.mjs'
 import { browserQaNode } from './nodes/browserqa.mjs'
 import { deployNode } from './nodes/deploy.mjs'
+import { previewNode } from './nodes/preview.mjs'
 import { addComment, AGENT_MARK } from './lib/jira.mjs'
 import { traced } from './lib/trace.mjs'
 
@@ -244,6 +245,7 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     .addNode('verify', N('verify', verifyNode({ budget, onProgress })))
     .addNode('repair', N('repair', repairNode({ budget, onProgress })))
     .addNode('deploy', N('deploy', deployNode({ budget, onProgress })))
+    .addNode('preview', N('preview', previewNode({ budget, onProgress })))
     .addNode('browserqa', N('browserqa', browserQaNode({ budget, onProgress })))
     .addNode('handover', N('handover', handoverNode))
     .addNode('approve', N('approve', approveNode()))
@@ -258,7 +260,8 @@ export function buildGraph({ budget, checkpointer, trace, dryRun = false, onProg
     .addConditionalEdges('patch', afterPatch, ['verify', 'planning', 'refuse'])
     .addConditionalEdges('verify', afterVerifyWith(budget), ['deploy', 'repair', 'handover', 'refuse'])
     .addEdge('deploy', 'browserqa')
-    .addEdge('browserqa', 'approve')
+    .addEdge('browserqa', 'preview')
+    .addEdge('preview', 'approve')
     .addConditionalEdges('approve', orRefuse('publish'), ['publish', 'refuse'])
     .addConditionalEdges('repair', afterRepair, ['verify', 'handover', 'refuse'])   // the bounded loop
     .addEdge('handover', 'publish')

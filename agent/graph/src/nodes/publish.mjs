@@ -12,6 +12,7 @@
 
 import { execFile } from 'node:child_process'
 import { proofFromState, proofBlock } from '../lib/proof.mjs'
+import { previewBlock } from './preview.mjs'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -531,10 +532,15 @@ export function publishNode({ budget, dryRun = false }) {
     // The ledger goes before the narrative: a reviewer should know how much is demonstrated and how
     // much is the agent's reading before they read the agent's reading.
     const proof = proofBlock(proofFromState(s))
+    // The link goes FIRST. A reviewer who only ever reads one thing should read the one that lets
+    // them check the claim themselves, before any prose the agent wrote about its own work.
+    const seeIt = previewBlock(s)
     const body = (href) => [
       handover,
       `> **${banner}**`,
       '',
+      seeIt,
+      seeIt ? '' : '',
       proof,
       '',
       narrative,
@@ -845,6 +851,11 @@ export function publishNode({ budget, dryRun = false }) {
         '', `**${prUrl}** -> \`${s.prTargetBranch}\`${updated ? ' _(updated — a run for this ticket had already opened it)_' : ''}`,
         ...extraPrs.map((x) => `${x.url} -> \`${x.target}\` — same branch, for testing on the lower environment`),
         '',
+        // The link belongs on the TICKET too: the person who reported it, and the QA who will close
+        // it, read Jira — not the PR.
+        s.preview?.status === 'ready' && s.preview.after?.url
+          ? `**See it running:** [fixed](${s.preview.after.url})${s.preview.before?.url ? ` · [before](${s.preview.before.url})` : ''} — ${s.preview.layer === 'backend' ? `same UI, backend version ${s.preview.after.versionId} vs ${s.preview.before?.branch || 'qa'}` : `this branch's UI on ${s.preview.after.branch}`}. Sign in and follow the steps in the ticket.`
+          : '',
         evidenceLine,
         `Gate: ${s.gate?.summary || '—'}`,
         s.gate?.skipped?.length ? `Not run for the clock: ${s.gate.skipped.join(', ')} — CI on the PR covers it.` : '',

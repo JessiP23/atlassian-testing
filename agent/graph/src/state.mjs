@@ -20,7 +20,8 @@ export const S = Annotation.Root({
 
   // ---- intake -------------------------------------------------------------------------------
   ticket: last(),            // { summary, description, comments[], attachments[] } — redacted
-  spec: last(),              // { summary, acceptanceCriteria[], constraints[], nonGoals[], riskNotes[], testPlan[] }
+  spec: last(),
+  preview: last(),        // { status, origin, layer, after:{url,versionId}, before:{url} } — the link a reviewer clicks              // { summary, acceptanceCriteria[], constraints[], nonGoals[], riskNotes[], testPlan[] }
 
   // ---- localization -------------------------------------------------------------------------
   candidates: last(),        // router top-25: [{ path, score, why }]
