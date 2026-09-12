@@ -250,7 +250,15 @@ export async function fetchAttachmentImages(ticket, { max = 6, maxBytes = 2 * 10
   return out
 }
 
+// Read-only mode: PAG_JIRA_READONLY=1 lets a full run happen against a REAL ticket without leaving a
+// trace on it. Reads (the ticket, its attachments, its history, its comments) are untouched; every
+// write — comments, transitions, label swaps — is announced and skipped. This is the only correct
+// place for the switch: a caller that forgets to check it cannot write by accident.
+export const JIRA_READONLY = () => process.env.PAG_JIRA_READONLY === '1'
+const heldBack = (what) => { console.error(`      jira read-only: ${what} — not sent`); return { readOnly: true } }
+
 export async function addComment(key, markdown) {
+  if (JIRA_READONLY()) return heldBack(`comment on ${key} (${markdown.split('\n')[0].slice(0, 60)}…)`)
   return api(`/rest/api/3/issue/${encodeURIComponent(key)}/comment`, {
     method: 'POST',
     body: { body: { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: markdown.slice(0, 30000) }] }] } },
@@ -284,6 +292,7 @@ export async function currentStatus(key) {
  * @param {string|string[]} wanted  candidate transition names, best first
  */
 export async function transition(key, wanted) {
+  if (JIRA_READONLY()) return { moved: false, readOnly: true, reason: heldBack(`transition ${key} to ${[].concat(wanted).filter(Boolean).join('/')}`) && 'PAG_JIRA_READONLY=1' }
   const candidates = (Array.isArray(wanted) ? wanted : [wanted]).filter(Boolean)
   const transitions = await listTransitions(key)
   if (!transitions.length) return { moved: false, reason: 'no transitions are available from the current status', available: [] }
@@ -314,5 +323,6 @@ export async function searchIssues(jql, { max = 50 } = {}) {
 
 /** Replace one label with another on an issue (the poller's "claimed" marker). */
 export async function swapLabel(key, from, to) {
+  if (JIRA_READONLY()) return heldBack(`label swap on ${key}: ${from} -> ${to}`)
   await api(`/rest/api/3/issue/${encodeURIComponent(key)}`, { method: 'PUT', body: { update: { labels: [{ remove: from }, { add: to }] } } })
 }

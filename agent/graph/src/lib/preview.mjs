@@ -69,10 +69,12 @@ export async function previewOrigin(env = process.env) {
   try {
     const { stdout } = await exec('aws', ['cloudfront', 'list-distributions', '--output', 'json'], { env, timeout: 60_000, maxBuffer: 1 << 26 })
     const items = JSON.parse(stdout)?.DistributionList?.Items || []
-    for (const d of items) {
-      const cname = d.AliasICPRecordals?.[0]?.CNAME || ''
-      if (cname.startsWith('*.')) return `https://${cname.slice(2)}`
-    }
+    // There is more than one wildcard: the preview domain (*.jessi-panda-app.com) and each deployed
+    // version's own (*.238f0e42.jessi-panda-app.com). Preview bundles are served from the base one,
+    // so take the SHORTEST — picking whichever came back first produced links that 404.
+    const wild = items.map((d) => d.AliasICPRecordals?.[0]?.CNAME || '').filter((c) => c.startsWith('*.'))
+      .map((c) => c.slice(2)).sort((a, b) => a.split('.').length - b.split('.').length || a.length - b.length)
+    if (wild[0]) return `https://${wild[0]}`
   } catch { /* no credentials, or no distribution — the caller reports it as a skip */ }
   return null
 }
